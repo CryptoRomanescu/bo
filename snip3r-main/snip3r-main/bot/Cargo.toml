@@ -1,0 +1,173 @@
+[package]
+name = "h-5n1p3r"
+version = "0.1.0"
+edition = "2021"
+default-run = "h-5n1p3r"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error handling
+anyhow = "1.0"
+
+# Logging and Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.24"
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.17", features = ["tokio"] }
+opentelemetry-prometheus = "0.17"
+tracing-opentelemetry = "0.25"
+prometheus = "0.13"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "native-tls"], default-features = false }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Random number generation for simulation
+rand = "0.8"
+
+# Rate limiting
+governor = "0.10"
+
+# Non-empty collections
+nonempty = "0.12"
+
+# Async caching
+moka = { version = "0.12", features = ["future"] }
+
+# Retry logic
+tokio-retry = "0.3"
+
+# Async traits
+async-trait = "0.1"
+
+# Futures utilities
+futures = "0.3"
+
+# Actor system
+actix = "0.13"
+actix-rt = "2.10"
+
+# Solana dependencies for on-chain verification
+solana-client = "2.0"
+solana-sdk = "2.0"
+solana-transaction-status = "2.0"
+
+# Storage tiering dependencies
+parquet = "53.3"
+arrow = "53.3"
+
+# URL encoding for API requests
+urlencoding = "2.1"
+
+# Security - constant-time comparison for secrets
+subtle = "2.6"
+
+# Security - input validation with regex
+regex = "1.10"
+
+# Security - URL parsing and validation
+url = "2.5"
+
+# Graph analysis for pump/wash trading detection
+petgraph = "0.6"
+
+[lib]
+name = "h_5n1p3r"
+path = "src/lib.rs"
+
+[[bin]]
+name = "h-5n1p3r"
+path = "src/main.rs"
+
+[[bin]]
+name = "test_optimization"
+path = "src/bin/test_optimization.rs"
+
+[[bin]]
+name = "early-pump-cli"
+path = "src/bin/early_pump_cli.rs"
+
+[[bin]]
+name = "smart-money-cli"
+path = "src/bin/smart_money_cli.rs"
+
+[[example]]
+name = "demo_persistent_queue"
+path = "examples/demo_persistent_queue.rs"
+
+[[example]]
+name = "demo_metacognition"
+path = "examples/demo_metacognition.rs"
+
+[[example]]
+name = "demo_pattern_memory"
+path = "examples/demo_pattern_memory.rs"
+
+[[example]]
+name = "demo_oracle_pattern_integration"
+path = "examples/demo_oracle_pattern_integration.rs"
+
+[[example]]
+name = "demo_full_system"
+path = "examples/demo_full_system.rs"
+
+[[example]]
+name = "demo_actor_system"
+path = "examples/demo_actor_system.rs"
+
+[[example]]
+name = "demo_tiered_storage"
+path = "examples/demo_tiered_storage.rs"
+
+[[example]]
+name = "demo_feature_engineering"
+path = "examples/demo_feature_engineering.rs"
+
+[[example]]
+name = "demo_ensemble"
+path = "examples/demo_ensemble.rs"
+
+[[example]]
+name = "demo_graph_analyzer"
+path = "examples/demo_graph_analyzer.rs"
+
+[[example]]
+name = "demo_circuit_breaker_advanced"
+path = "examples/demo_circuit_breaker_advanced.rs"
+
+[[example]]
+name = "demo_early_pump_detector"
+path = "examples/demo_early_pump_detector.rs"
+
+[[example]]
+name = "demo_smart_money_integration"
+path = "examples/demo_smart_money_integration.rs"
+
+[[example]]
+name = "demo_wash_trading_detector"
+path = "examples/demo_wash_trading_detector.rs"
+
+[[example]]
+name = "demo_supply_concentration_analyzer"
+path = "examples/demo_supply_concentration_analyzer.rs"
+
+[[example]]
+name = "demo_token_detector"
+path = "examples/demo_token_detector.rs"
+
+[[example]]
+name = "demo_bot_bundle_detector"
+path = "examples/demo_bot_bundle_detector.rs"

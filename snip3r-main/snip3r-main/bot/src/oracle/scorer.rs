@@ -1,0 +1,695 @@
+//! Oracle scorer - combines feature scores into final predictions.
+//!
+//! This module orchestrates the scoring process by combining feature computation,
+//! anomaly detection, and weighting to produce final candidate scores.
+
+use crate::oracle::types::{
+    ScoredCandidate, OracleConfig, TokenData, FeatureScores, Feature, FeatureWeights,
+    MarketRegime, // Add MarketRegime import for Pillar III
+};
+use crate::oracle::features::OracleFeatureComputer;
+use crate::oracle::data_sources::OracleDataSources;
+use crate::oracle::anomaly::AnomalyDetector;
+use crate::oracle::weights::AdaptiveWeights;
+use crate::oracle::metacognition::ConfidenceCalibrator;
+use crate::types::{PremintCandidate, QuantumCandidateGui};
+use anyhow::Result;
+use reqwest::Client;
+use solana_client::nonblocking::rpc_client::RpcClient;
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, info, warn, instrument};
+
+/// Oracle scorer that combines all scoring components.
+#[derive(Clone)]
+pub struct OracleScorer {
+    pub scored_sender: mpsc::Sender<ScoredCandidate>,
+    pub gui_suggestions: Arc<Mutex<Option<mpsc::Sender<QuantumCandidateGui>>>>,
+    pub config: OracleConfig,
+    pub data_sources: Arc<OracleDataSources>,
+    pub feature_computer: Arc<OracleFeatureComputer>,
+    pub anomaly_detector: Arc<AnomalyDetector>,
+    pub adaptive_weights: Arc<Mutex<AdaptiveWeights>>,
+    pub confidence_calibrator: Arc<Mutex<ConfidenceCalibrator>>,
+}
+
+impl OracleScorer {
+    /// Create a new oracle scorer.
+    pub fn new(
+        scored_sender: mpsc::Sender<ScoredCandidate>,
+        gui_suggestions: Arc<Mutex<Option<mpsc::Sender<QuantumCandidateGui>>>>,
+        rpc_clients: Vec<Arc<RpcClient>>,
+        http_client: Client,
+        config: OracleConfig,
+    ) -> Self {
+        let data_sources = Arc::new(OracleDataSources::new(
+            rpc_clients,
+            http_client,
+            config.clone(),
+        ));
+        
+        let feature_computer = Arc::new(OracleFeatureComputer::new(config.clone()));
+        let anomaly_detector = Arc::new(AnomalyDetector::new(config.clone()));
+        let adaptive_weights = Arc::new(Mutex::new(AdaptiveWeights::new(config.weights.clone())));
+        let confidence_calibrator = Arc::new(Mutex::new(ConfidenceCalibrator::new()));
+
+        Self {
+            scored_sender,
+            gui_suggestions,
+            config,
+            data_sources,
+            feature_computer,
+            anomaly_detector,
+            adaptive_weights,
+            confidence_calibrator,
+        }
+    }
+
+    /// Score a candidate token.
+    #[instrument(skip(self), fields(mint = %candidate.mint))]
+    pub async fn score_candidate(&self, candidate: &PremintCandidate) -> Result<ScoredCandidate> {
+        // Use default LowActivity regime if no regime is specified
+        self.score_candidate_with_regime(candidate, &MarketRegime::LowActivity).await
+    }
+
+    /// Score a candidate using regime-specific parameters (Pillar III).
+    #[instrument(skip(self, candidate, current_regime), fields(mint = %candidate.mint, regime = ?current_regime))]
+    pub async fn score_candidate_with_regime(
+        &self, 
+        candidate: &PremintCandidate,
+        current_regime: &MarketRegime,
+    ) -> Result<ScoredCandidate> {
+        let start_time = Instant::now();
+        
+        debug!("Starting to score candidate: {} in regime: {:?}", candidate.mint, current_regime);
+
+        // --- PILLAR III: Dynamically load regime-specific parameters ---
+        let regime_params = self.config.regime_parameters.get(current_regime)
+            .unwrap_or_else(|| {
+                warn!("No parameters found for regime {:?}, falling back to LowActivity", current_regime);
+                self.config.regime_parameters.get(&MarketRegime::LowActivity)
+                    .expect("LowActivity regime parameters must exist")
+            });
+
+        // Fetch token data from multiple sources
+        let token_data = self.data_sources
+            .fetch_token_data_with_retries(candidate)
+            .await?;
+
+        // Compute feature scores using regime-specific thresholds
+        let feature_scores = self.feature_computer
+            .compute_all_features_with_thresholds(candidate, &token_data, &regime_params.thresholds)
+            .await
+            .unwrap_or_else(|_| {
+                // Fallback to default method if new method doesn't exist yet
+                self.feature_computer.compute_all_features(candidate, &token_data)
+            })?;
+
+        // Detect anomalies
+        let anomaly_detected = self.anomaly_detector
+            .detect_anomalies(&token_data)
+            .await;
+
+        // Calculate weighted final score using regime-specific weights
+        let predicted_score = self.calculate_predicted_score_with_weights(&feature_scores, &regime_params.weights).await?;
+
+        // Apply anomaly penalty if detected
+        let final_score = if anomaly_detected {
+            debug!("Anomaly detected, applying penalty");
+            (predicted_score as f64 * 0.5) as u8 // 50% penalty for anomalies
+        } else {
+            predicted_score
+        };
+
+        // Apply confidence calibration (Metacognition)
+        let raw_confidence = final_score as f64 / 100.0; // Convert score to confidence (0.0-1.0)
+        let calibrated_confidence = {
+            let mut calibrator = self.confidence_calibrator.lock().await;
+            calibrator.calibrate_confidence(raw_confidence)
+        };
+        
+        // Adjust final score based on calibrated confidence
+        let calibrated_score = (calibrated_confidence * 100.0) as u8;
+        
+        debug!("Confidence calibration: raw={:.3} ({}) -> calibrated={:.3} ({})", 
+               raw_confidence, final_score, calibrated_confidence, calibrated_score);
+
+        // Generate explanation
+        let reason = self.generate_reason_with_regime(&feature_scores, calibrated_score, anomaly_detected, current_regime);
+
+        // Create scored candidate
+        let scored = ScoredCandidate {
+            base: candidate.clone(),
+            mint: candidate.mint.clone(),
+            predicted_score: calibrated_score,
+            feature_scores: feature_scores.to_hashmap(),
+            reason,
+            calculation_time: start_time.elapsed().as_micros(),
+            anomaly_detected,
+            timestamp: candidate.timestamp,
+        };
+
+        info!("Scored candidate {} with score {} (calibrated from {}) in {}μs using {:?} regime", 
+              candidate.mint, calibrated_score, final_score, scored.calculation_time, current_regime);
+
+        Ok(scored)
+    }
+
+    /// Legacy method - kept for backward compatibility.
+    /// New code should use score_candidate_with_regime().
+    pub async fn score_candidate_legacy(&self, candidate: &PremintCandidate) -> Result<ScoredCandidate> {
+        let start_time = Instant::now();
+        
+        debug!("Starting to score candidate: {}", candidate.mint);
+
+        // Fetch token data from multiple sources
+        let token_data = self.data_sources
+            .fetch_token_data_with_retries(candidate)
+            .await?;
+
+        // Compute feature scores
+        let feature_scores = self.feature_computer
+            .compute_all_features(candidate, &token_data)
+            .await?;
+
+        // Detect anomalies
+        let anomaly_detected = self.anomaly_detector
+            .detect_anomalies(&token_data)
+            .await;
+
+        // Calculate weighted final score
+        let predicted_score = self.calculate_predicted_score(&feature_scores).await?;
+
+        // Apply anomaly penalty if detected
+        let final_score = if anomaly_detected {
+            debug!("Anomaly detected, applying penalty");
+            (predicted_score as f64 * 0.5) as u8 // 50% penalty for anomalies
+        } else {
+            predicted_score
+        };
+
+        // Generate explanation
+        let reason = self.generate_reason(&feature_scores, final_score, anomaly_detected);
+
+        // Create scored candidate
+        let scored = ScoredCandidate {
+            base: candidate.clone(),
+            mint: candidate.mint.clone(),
+            predicted_score: final_score,
+            feature_scores: feature_scores.to_hashmap(),
+            reason,
+            calculation_time: start_time.elapsed().as_micros(),
+            anomaly_detected,
+            timestamp: candidate.timestamp,
+        };
+
+        info!("Scored candidate {} with score {} in {}μs", 
+              candidate.mint, final_score, scored.calculation_time);
+
+        Ok(scored)
+    }
+
+    /// Calculate the predicted score using adaptive weights.
+    #[instrument(skip(self, feature_scores))]
+    async fn calculate_predicted_score(&self, feature_scores: &FeatureScores) -> Result<u8> {
+        let weights = self.adaptive_weights.lock().await;
+        let effective_weights = weights.get_effective_weights();
+
+        let mut weighted_sum = 0.0;
+        let mut total_weight = 0.0;
+
+        // Calculate weighted sum of all features
+        for feature in Feature::all() {
+            let score = feature_scores.get(feature);
+            let weight = self.get_feature_weight(&effective_weights, feature);
+            
+            weighted_sum += score * weight;
+            total_weight += weight;
+        }
+
+        // Normalize to 0-100 scale
+        let normalized_score = if total_weight > 0.0 {
+            (weighted_sum / total_weight * 100.0).round() as u8
+        } else {
+            50 // Default score if no weights
+        };
+
+        debug!("Calculated weighted score: {}/100 (sum={:.3}, weight={:.3})", 
+               normalized_score, weighted_sum, total_weight);
+
+        Ok(normalized_score.min(100))
+    }
+
+    /// Get weight for a specific feature.
+    fn get_feature_weight(&self, weights: &FeatureWeights, feature: Feature) -> f64 {
+        match feature {
+            Feature::Liquidity => weights.liquidity,
+            Feature::HolderDistribution => weights.holder_distribution,
+            Feature::VolumeGrowth => weights.volume_growth,
+            Feature::HolderGrowth => weights.holder_growth,
+            Feature::PriceChange => weights.price_change,
+            Feature::JitoBundlePresence => weights.jito_bundle_presence,
+            Feature::CreatorSellSpeed => weights.creator_sell_speed,
+            Feature::MetadataQuality => weights.metadata_quality,
+            Feature::SocialActivity => weights.social_activity,
+        }
+    }
+
+    /// Calculate predicted score using specific regime weights (Pillar III).
+    #[instrument(skip(self, feature_scores, regime_weights))]
+    async fn calculate_predicted_score_with_weights(
+        &self, 
+        feature_scores: &FeatureScores, 
+        regime_weights: &FeatureWeights
+    ) -> Result<u8> {
+        let mut weighted_sum = 0.0;
+        let mut total_weight = 0.0;
+
+        // Calculate weighted sum using regime-specific weights
+        for feature in Feature::all() {
+            let score = feature_scores.get(feature);
+            let weight = self.get_feature_weight(regime_weights, feature);
+            
+            weighted_sum += score * weight;
+            total_weight += weight;
+        }
+
+        // Normalize to 0-100 scale
+        let normalized_score = if total_weight > 0.0 {
+            (weighted_sum / total_weight * 100.0).round() as u8
+        } else {
+            50 // Default score if no weights
+        };
+
+        debug!("Calculated regime-weighted score: {}/100 (sum={:.3}, weight={:.3})", 
+               normalized_score, weighted_sum, total_weight);
+
+        Ok(normalized_score.min(100))
+    }
+
+    /// Generate regime-aware explanation for the score (Pillar III).
+    #[instrument(skip(self, feature_scores, current_regime))]
+    fn generate_reason_with_regime(
+        &self,
+        feature_scores: &FeatureScores,
+        score: u8,
+        anomaly_detected: bool,
+        current_regime: &MarketRegime,
+    ) -> String {
+        let mut reasons = Vec::new();
+
+        // Add regime context to explanation
+        let regime_context = match current_regime {
+            MarketRegime::Bullish => "Bull market conditions favor volume and growth metrics",
+            MarketRegime::Bearish => "Bear market conditions prioritize liquidity and risk management",
+            MarketRegime::Choppy => "Volatile market conditions require balanced assessment",
+            MarketRegime::HighCongestion => "Network congestion prioritizes Jito bundle execution",
+            MarketRegime::LowActivity => "Low activity market uses conservative evaluation",
+        };
+        reasons.push(regime_context.to_string());
+
+        // Add feature-specific reasons (reuse existing logic but with regime context)
+        self.add_feature_reasons(&mut reasons, feature_scores);
+
+        if anomaly_detected {
+            reasons.push("Anomaly penalty applied (-50%)".to_string());
+        }
+
+        format!("Score {}/100: {}", score, reasons.join(", "))
+    }
+
+    /// Add feature-specific reasons to the explanation.
+    fn add_feature_reasons(&self, reasons: &mut Vec<String>, feature_scores: &FeatureScores) {
+        if feature_scores.get(Feature::Liquidity) > 0.8 {
+            reasons.push("excellent liquidity".to_string());
+        }
+        if feature_scores.get(Feature::VolumeGrowth) > 0.7 {
+            reasons.push("strong volume growth".to_string());
+        }
+        if feature_scores.get(Feature::HolderGrowth) > 0.7 {
+            reasons.push("healthy holder growth".to_string());
+        }
+        if feature_scores.get(Feature::JitoBundlePresence) > 0.5 {
+            reasons.push("Jito bundle detected".to_string());
+        }
+        if feature_scores.get(Feature::CreatorSellSpeed) < 0.3 {
+            reasons.push("creator holding behavior".to_string());
+        }
+    }
+
+    /// Generate human-readable reason for the score.
+    #[instrument(skip(self, feature_scores))]
+    fn generate_reason(
+        &self,
+        feature_scores: &FeatureScores,
+        score: u8,
+        anomaly_detected: bool,
+    ) -> String {
+        let mut reasons = Vec::new();
+
+        // Analyze strongest features
+        let mut feature_impacts: Vec<(Feature, f64, f64)> = Feature::all()
+            .into_iter()
+            .map(|f| {
+                let score = feature_scores.get(f);
+                let weight = self.get_feature_weight(&self.config.weights, f);
+                (f, score, score * weight)
+            })
+            .collect();
+
+        // Sort by impact (score * weight)
+        feature_impacts.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Add top positive factors
+        for (feature, score, _impact) in feature_impacts.iter().take(3) {
+            if *score > 0.6 {
+                let feature_name = format!("{:?}", feature).to_lowercase().replace("_", " ");
+                reasons.push(format!("strong {}", feature_name));
+            }
+        }
+
+        // Add top negative factors
+        for (feature, score, _impact) in feature_impacts.iter().rev().take(2) {
+            if *score < 0.4 {
+                let feature_name = format!("{:?}", feature).to_lowercase().replace("_", " ");
+                reasons.push(format!("weak {}", feature_name));
+            }
+        }
+
+        // Add anomaly warning
+        if anomaly_detected {
+            reasons.push("anomaly detected".to_string());
+        }
+
+        // Create final reason string
+        let reason = if reasons.is_empty() {
+            format!("Moderate score of {}/100 based on balanced factors", score)
+        } else {
+            format!("Score {}/100: {}", score, reasons.join(", "))
+        };
+
+        debug!("Generated reason: {}", reason);
+        reason
+    }
+
+    /// Update adaptive weights with historical data.
+    #[instrument(skip(self, historical_scores))]
+    pub async fn update_adaptive_weights(&self, historical_scores: &[ScoredCandidate]) {
+        if historical_scores.is_empty() {
+            return;
+        }
+
+        let mut weights = self.adaptive_weights.lock().await;
+        weights.recalculate(historical_scores);
+        
+        debug!("Updated adaptive weights with {} historical scores", historical_scores.len());
+    }
+
+    /// Send GUI notification if score meets threshold.
+    #[instrument(skip(self, scored))]
+    pub async fn send_gui_notification(&self, scored: &ScoredCandidate) {
+        if scored.predicted_score >= self.config.notify_threshold {
+            let gui_suggestion = QuantumCandidateGui {
+                candidate: scored.base.clone(),
+                score: scored.predicted_score,
+                reason: scored.reason.clone(),
+                features: scored.feature_scores.clone(),
+            };
+
+            if let Some(sender) = self.gui_suggestions.lock().await.as_ref() {
+                if let Err(e) = sender.send(gui_suggestion).await {
+                    warn!("Failed to send GUI suggestion: {}", e);
+                } else {
+                    debug!("Sent GUI notification for score {}", scored.predicted_score);
+                }
+            }
+        }
+    }
+    
+    /// Record a trade outcome for metacognition learning
+    /// This should be called after a trade completes to update confidence calibration
+    #[instrument(skip(self))]
+    pub async fn record_trade_outcome(
+        &self,
+        predicted_confidence: f64,
+        predicted_score: u8,
+        was_successful: bool,
+        actual_outcome: f64,
+        timestamp: u64,
+    ) {
+        use crate::oracle::metacognition::DecisionOutcome;
+        
+        let outcome = DecisionOutcome::new(
+            predicted_confidence,
+            predicted_score,
+            was_successful,
+            actual_outcome,
+            timestamp,
+        );
+        
+        let mut calibrator = self.confidence_calibrator.lock().await;
+        calibrator.add_decision(outcome);
+        
+        info!("Recorded trade outcome for metacognition: score={}, success={}, outcome={:.3}", 
+              predicted_score, was_successful, actual_outcome);
+    }
+    
+    /// Get calibration statistics
+    pub async fn get_calibration_stats(&self) -> crate::oracle::metacognition::CalibrationStats {
+        let mut calibrator = self.confidence_calibrator.lock().await;
+        calibrator.get_stats()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oracle::types::*;
+    use crate::types::PremintCandidate;
+    use solana_sdk::pubkey::Pubkey;
+    use std::collections::VecDeque;
+    use tokio::sync::mpsc;
+
+    fn create_test_config() -> OracleConfig {
+        OracleConfig::default()
+    }
+
+    fn create_test_candidate() -> PremintCandidate {
+        PremintCandidate {
+            mint: Pubkey::new_unique(),
+            creator: Pubkey::new_unique(),
+            program: "test".to_string(),
+            slot: 12345,
+            timestamp: 1640995200,
+            instruction_summary: None,
+            is_jito_bundle: Some(true),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_oracle_scorer_creation() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config.clone(),
+        );
+
+        assert_eq!(scorer.config.notify_threshold, config.notify_threshold);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_predicted_score() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config,
+        );
+
+        let mut feature_scores = FeatureScores::new();
+        feature_scores.set(Feature::Liquidity, 0.8);
+        feature_scores.set(Feature::VolumeGrowth, 0.7);
+        feature_scores.set(Feature::MetadataQuality, 0.9);
+
+        let score = scorer.calculate_predicted_score(&feature_scores).await.unwrap();
+        
+        // Score should be between 0 and 100
+        assert!(score <= 100);
+        // With decent feature scores, should be above 50
+        assert!(score > 50);
+    }
+
+    #[test]
+    fn test_generate_reason() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config,
+        );
+
+        let mut feature_scores = FeatureScores::new();
+        feature_scores.set(Feature::Liquidity, 0.9);
+        feature_scores.set(Feature::VolumeGrowth, 0.8);
+        feature_scores.set(Feature::HolderDistribution, 0.2);
+
+        let reason = scorer.generate_reason(&feature_scores, 75, false);
+        
+        assert!(reason.contains("75"));
+        assert!(reason.len() > 10); // Should be a meaningful explanation
+    }
+
+    #[test]
+    fn test_generate_reason_with_anomaly() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config,
+        );
+
+        let feature_scores = FeatureScores::new();
+        let reason = scorer.generate_reason(&feature_scores, 60, true);
+        
+        assert!(reason.contains("anomaly detected"));
+    }
+
+    #[test]
+    fn test_get_feature_weight() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config.clone(),
+        );
+
+        let weight = scorer.get_feature_weight(&config.weights, Feature::Liquidity);
+        assert_eq!(weight, config.weights.liquidity);
+
+        let weight = scorer.get_feature_weight(&config.weights, Feature::VolumeGrowth);
+        assert_eq!(weight, config.weights.volume_growth);
+    }
+
+    #[tokio::test]
+    async fn test_record_trade_outcome() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config,
+        );
+
+        // Initially no decisions
+        let stats = scorer.get_calibration_stats().await;
+        assert_eq!(stats.decision_count, 0);
+
+        // Record a successful outcome
+        scorer.record_trade_outcome(0.80, 80, true, 0.5, 1000).await;
+
+        // Should have 1 decision now
+        let stats = scorer.get_calibration_stats().await;
+        assert_eq!(stats.decision_count, 1);
+        assert!((stats.avg_predicted_confidence - 0.80).abs() < 0.01);
+    }
+
+    #[tokio::test]
+    async fn test_calibration_with_multiple_outcomes() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config,
+        );
+
+        // Record multiple outcomes - overconfident pattern
+        for i in 0..20 {
+            let success = i < 10; // 50% success rate
+            let outcome = if success { 0.4 } else { -0.4 };
+            scorer.record_trade_outcome(0.80, 80, success, outcome, 1000 + i).await;
+        }
+
+        // Should detect overconfidence
+        let stats = scorer.get_calibration_stats().await;
+        assert_eq!(stats.decision_count, 20);
+        assert!((stats.avg_predicted_confidence - 0.80).abs() < 0.01);
+        assert!((stats.avg_success_rate - 0.50).abs() < 0.01);
+        assert!(stats.confidence_bias > 0.0, "Should detect overconfidence");
+    }
+
+    #[tokio::test]
+    async fn test_get_calibration_stats() {
+        let (scored_tx, _scored_rx) = mpsc::channel(10);
+        let gui_suggestions = Arc::new(Mutex::new(None));
+        let config = create_test_config();
+        let http_client = Client::new();
+        let rpc_clients = vec![];
+
+        let scorer = OracleScorer::new(
+            scored_tx,
+            gui_suggestions,
+            rpc_clients,
+            http_client,
+            config,
+        );
+
+        // Add some decisions
+        for i in 0..15 {
+            scorer.record_trade_outcome(0.70, 70, true, 0.3, 1000 + i).await;
+        }
+
+        let stats = scorer.get_calibration_stats().await;
+        assert_eq!(stats.decision_count, 15);
+        assert!(stats.calculation_time_ns < 1_000_000, "Should calculate in <1ms");
+    }
+}
