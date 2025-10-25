@@ -9,224 +9,12 @@ use prometheus::{
 };
 use rand::Rng;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn};
-
-/// Cancellation token for graceful task shutdown.
-/// 
-/// ## Implementation Details
-/// 
-/// This implementation uses `tokio::sync::Notify` for deterministic, reactive cancellation
-/// with **zero CPU usage** during idle periods. All waiting tasks are woken **immediately**
-/// upon `cancel()` with no polling or quantum timing delays.
-/// 
-/// ## Concurrency Semantics
-/// 
-/// **Atomicity**: The cancellation flag (`AtomicBool`) and notification mechanism (`Notify`)
-/// work together to provide atomic cancellation semantics:
-/// 1. `cancel()` first sets the flag with SeqCst ordering (visible to all threads immediately)
-/// 2. Then calls `notify_waiters()` to wake all currently waiting tasks
-/// 
-/// **Fast-path**: The `cancelled()` method checks the flag first before waiting on Notify.
-/// This eliminates the race condition where a task might call `cancelled()` after `cancel()`
-/// has already been called but before entering the wait state. The task will return immediately
-/// without ever waiting.
-/// 
-/// ## Notify Guarantees and Limitations
-/// 
-/// **Important**: `Notify::notify_waiters()` only wakes tasks that are **already waiting**
-/// at the time of the call. Tasks that call `notified()` **after** `notify_waiters()`
-/// has been called will **not** be woken by that notification.
-/// 
-/// This is why the fast-path check is critical: it ensures that any task checking cancellation
-/// after `cancel()` has been called will see the flag and return immediately, without
-/// depending on Notify at all. This makes the cancellation semantics reliable and predictable.
-/// 
-/// ## Race Condition Analysis: Cancel-After-Await
-/// 
-/// **The Problem:** Without proper synchronization, there's a critical race window between
-/// checking cancellation state and entering the wait state:
-/// 
-/// ```text
-/// ┌─────────────────────────────────────────────────────────────────┐
-/// │ Thread A: cancelled()      │ Thread B: cancel()                 │
-/// ├────────────────────────────┼────────────────────────────────────┤
-/// │ (decide to wait)           │                                    │
-/// │                            │ flag.store(true)                   │
-/// │                            │ notify.notify_waiters() ← no waiter!│
-/// │ notify.notified().await    │                                    │
-/// │ ❌ STUCK WAITING FOREVER    │                                    │
-/// └────────────────────────────┴────────────────────────────────────┘
-/// ```
-/// 
-/// **The Solution:** Fast-path `is_cancelled()` check with SeqCst memory ordering:
-/// 
-/// ```text
-/// ┌─────────────────────────────────────────────────────────────────┐
-/// │ Thread A: cancelled()      │ Thread B: cancel()                 │
-/// ├────────────────────────────┼────────────────────────────────────┤
-/// │ if is_cancelled() = false  │                                    │
-/// │                            │ flag.store(true, SeqCst)           │
-/// │                            │ notify.notify_waiters()            │
-/// │ if is_cancelled() = true ✓ │                                    │
-/// │ return immediately         │                                    │
-/// └────────────────────────────┴────────────────────────────────────┘
-/// ```
-/// 
-/// The SeqCst memory ordering guarantees that the flag write in Thread B becomes visible
-/// to Thread A's fast-path check immediately, before Thread A can enter the wait state.
-/// This eliminates the race window entirely.
-/// 
-/// **Key Invariant:** At least ONE of the following is always true:
-/// 1. Fast-path check sees `is_cancelled() == true` → returns immediately
-/// 2. Task is already waiting when `notify_waiters()` is called → gets woken
-/// 
-/// Both paths lead to correct behavior, and the race window is closed.
-/// 
-/// ## Performance Characteristics
-/// 
-/// - **Zero CPU overhead**: No polling loops, tasks sleep until notification
-/// - **Immediate wakeup**: Sub-millisecond latency from cancel() to task wakeup
-/// - **Scalable**: O(1) notification cost regardless of number of waiting tasks
-/// - **Memory efficient**: Minimal overhead beyond Arc<AtomicBool> + Arc<Notify>
-/// 
-/// ## Example Usage
-/// 
-/// ```ignore
-/// let token = CancellationToken::new();
-/// let token_clone = token.clone();
-/// 
-/// tokio::spawn(async move {
-///     // Task waits for cancellation signal
-///     token_clone.cancelled().await;
-///     // Cleanup and exit
-/// });
-/// 
-/// // Later, signal cancellation
-/// token.cancel(); // All waiting tasks wake immediately
-/// ```
-#[derive(Clone)]
-pub struct CancellationToken {
-    cancelled: Arc<AtomicBool>,
-    notify: Arc<Notify>,
-}
-
-impl CancellationToken {
-    /// Create a new cancellation token.
-    pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    /// Cancel the token and wake all waiting tasks immediately.
-    /// 
-    /// This method is safe to call multiple times; subsequent calls have no effect.
-    /// All tasks currently waiting on `cancelled()` will be woken immediately.
-    /// 
-    /// ## Memory Ordering
-    /// 
-    /// Uses `SeqCst` ordering to ensure the cancellation is immediately visible
-    /// to all threads, preventing any task from missing the cancellation signal.
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        self.notify.notify_waiters();
-    }
-
-    /// Check if the token is cancelled without waiting.
-    /// 
-    /// This is a non-blocking operation that returns immediately.
-    /// Useful for checking cancellation status in loops or before starting work.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
-    }
-
-    /// Async wait for cancellation with reactive notification (zero polling).
-    /// 
-    /// This method will:
-    /// 1. Check if already cancelled (fast path) - returns immediately if true
-    /// 2. Wait for notification via Notify (reactive, no CPU usage)
-    /// 
-    /// ## Important: Fast-path Race Prevention
-    /// 
-    /// **Critical correctness guarantee under concurrent cancel-after-await race:**
-    /// 
-    /// The fast-path `is_cancelled()` check BEFORE `notified().await` eliminates
-    /// the race condition where `cancel()` might be called in the window between:
-    /// - Thread A checking cancellation state
-    /// - Thread A entering the wait state
-    /// - Thread B calling `cancel()` which sets the flag and notifies
-    /// 
-    /// **Race scenario (prevented by fast-path):**
-    /// ```
-    /// Time  | Thread A (cancelled())           | Thread B (cancel())
-    /// ------|----------------------------------|--------------------
-    /// t0    | (no fast-path check)             |
-    /// t1    | decides to wait                  |
-    /// t2    |                                  | sets flag = true
-    /// t3    |                                  | notify_waiters() [no waiters yet!]
-    /// t4    | enters notified().await          |
-    /// t5    | STUCK FOREVER ❌                 |
-    /// ```
-    /// 
-    /// **With fast-path check (correct):**
-    /// ```
-    /// Time  | Thread A (cancelled())           | Thread B (cancel())
-    /// ------|----------------------------------|--------------------
-    /// t0    | checks is_cancelled() = false    |
-    /// t1    |                                  | sets flag = true (SeqCst)
-    /// t2    |                                  | notify_waiters()
-    /// t3    | checks is_cancelled() = true ✓   |
-    /// t4    | returns immediately              |
-    /// ```
-    /// 
-    /// The SeqCst memory ordering ensures the flag write is immediately visible
-    /// to all threads, and the fast-path check catches cancellation that occurred
-    /// before entering the wait state.
-    /// 
-    /// ## Note on Notify Semantics
-    /// 
-    /// `Notify::notify_waiters()` only wakes tasks that are **already waiting**
-    /// at the moment `notify_waiters()` is called. Tasks that call `notified()`
-    /// **after** the notification will **not** be woken by that notification.
-    /// 
-    /// This is why the fast-path AtomicBool check is **essential for correctness**:
-    /// it ensures that any task checking cancellation after `cancel()` has been
-    /// called will see the flag and return immediately, without depending on
-    /// Notify at all. This makes the cancellation semantics reliable and predictable.
-    /// 
-    /// ## Documentation Reference
-    /// 
-    /// "Fast-path is_cancelled() + notify_waiters ensures correctness under
-    /// concurrent cancel-after-await race"
-    pub async fn cancelled(&self) {
-        // Fast path: check if already cancelled
-        // CRITICAL: This check eliminates race where cancel() is called after we
-        // decide to wait but before notified() registers as a waiter.
-        // With SeqCst ordering, this check sees any cancellation that happened
-        // before this point, preventing the task from entering wait state.
-        if self.is_cancelled() {
-            return;
-        }
-        
-        // Wait for notification (reactive, no polling, zero CPU overhead)
-        // At this point, we know the flag was false. If cancel() is called
-        // concurrently, we rely on one of two mechanisms:
-        // 1. If we're already waiting: notify_waiters() wakes us
-        // 2. If cancel() happens before we enter wait: the next fast-path
-        //    check (in a loop if needed) catches it
-        //
-        // However, since we only await once, we depend on the fast-path check
-        // above to catch any cancellation that happened before this await.
-        // This is safe because of SeqCst memory ordering.
-        self.notify.notified().await;
-    }
-}
 
 /// Backoff strategy with exponential backoff and jitter.
 #[derive(Debug, Clone)]
@@ -394,7 +182,7 @@ pub struct EndpointHealth {
 /// ## Shutdown Behavior
 ///
 /// When the CircuitBreaker is dropped or shutdown is called:
-/// - All monitoring tasks are cancelled via CancellationToken (Phase 1: graceful, Phase 2: forced abort)
+/// - All monitoring tasks are cancelled via CancellationToken
 /// - Metrics remain in the Prometheus registry until the registry itself is dropped
 /// - No cleanup of metrics is required as Prometheus handles de-registration on drop
 /// - No data races or deadlocks occur during shutdown due to deterministic task termination
@@ -3073,7 +2861,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancellation_token_immediate_termination() {
-        // Test that CancellationToken stops tasks immediately without polling delays
+        // Test that CancellationToken stops tasks immediately
         let token = CancellationToken::new();
         let token_clone = token.clone();
         
@@ -3084,21 +2872,20 @@ mod tests {
             token_clone.cancelled().await;
         });
         
-        // Give task time to start waiting (should be instant with Notify)
+        // Give task time to start waiting
         sleep(Duration::from_millis(10)).await;
         
         // Cancel the token
         let cancel_time = Instant::now();
         token.cancel();
         
-        // Task should complete immediately, not after polling interval
+        // Task should complete immediately
         let result = tokio::time::timeout(Duration::from_millis(50), task).await;
         let completion_time = Instant::now();
         
         assert!(result.is_ok(), "Task should complete within 50ms");
         
-        // The completion should be much faster than the old 10ms polling interval
-        // With Notify, it should complete in <5ms typically
+        // The completion should be fast
         let elapsed = completion_time.duration_since(cancel_time);
         assert!(
             elapsed < Duration::from_millis(5),
@@ -3170,7 +2957,6 @@ mod tests {
     #[tokio::test]
     async fn test_cancellation_token_zero_cpu_idle() {
         // Test that waiting tasks consume zero CPU in idle state
-        // This is a behavioral test - with Notify, there's no polling loop
         let token = CancellationToken::new();
         let token_clone = token.clone();
         
@@ -3180,18 +2966,12 @@ mod tests {
         });
         
         // Let the task wait for a bit (simulating idle state)
-        // With old polling implementation, this would accumulate CPU time
-        // With Notify, CPU usage should be zero
         sleep(Duration::from_millis(100)).await;
         
         // Cancel and verify task completes
         token.cancel();
         let result = tokio::time::timeout(Duration::from_millis(50), task).await;
         assert!(result.is_ok(), "Task should complete promptly");
-        
-        // Note: We can't directly measure CPU usage in a unit test,
-        // but the behavior is verified by the immediate wakeup test
-        // and the fact that there's no sleep() loop in the implementation
     }
 
     #[tokio::test]
@@ -4060,16 +3840,8 @@ mod tests {
     async fn test_cancel_after_await_race_condition() {
         // Test: Race condition where cancel() is called just as cancelled() is being awaited
         //
-        // This is the critical race scenario:
-        // - Thread A: calls `cancelled()` which checks `is_cancelled()` (false)
-        // - Thread B: calls `cancel()` sets flag to true and calls notify_waiters()
-        // - Thread A: enters the wait state via `notified().await`
-        //
-        // Without the fast-path check, Thread A would miss the notification and wait forever.
-        // The fast-path `is_cancelled()` check BEFORE `notified().await` prevents this.
-        //
-        // Documentation reference: "Fast-path is_cancelled() + notify_waiters ensures 
-        // correctness under concurrent cancel-after-await race"
+        // This validates that tokio_util::CancellationToken correctly handles the race
+        // where cancellation happens concurrently with waiting tasks.
         
         for iteration in 0..100 {
             let token = CancellationToken::new();
@@ -4411,14 +4183,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cancellation_notify_race_multiple_threads() {
-        // Test: Race condition with Notify semantics across multiple threads
+        // Test: Cancellation correctness across multiple threads
         //
-        // This test specifically validates the documented behavior:
-        // "notify_waiters() only wakes tasks that are ALREADY waiting"
-        //
-        // Combined with the fast-path check, this ensures correctness:
-        // - Tasks waiting before cancel() are woken by notify_waiters()
-        // - Tasks arriving after cancel() see the flag via fast-path
+        // This validates that tokio_util::CancellationToken correctly handles:
+        // - Tasks waiting before cancel() are woken immediately
+        // - Tasks arriving after cancel() see cancellation and return immediately
         // - No task ever gets stuck waiting
         
         for iteration in 0..50 {
@@ -4463,7 +4232,7 @@ mod tests {
                 let result = tokio::time::timeout(Duration::from_millis(100), task).await;
                 assert!(
                     result.is_ok(),
-                    "Late arrival {} did not complete via fast-path at iteration {}",
+                    "Late arrival {} did not complete at iteration {}",
                     i, iteration
                 );
             }
@@ -4513,7 +4282,7 @@ mod tests {
             
             let elapsed = start.elapsed();
             
-            // With Notify, all tasks should wake in <50ms even under high load
+            // All tasks should wake quickly even under high load
             assert!(
                 elapsed < Duration::from_millis(50),
                 "All {} tasks should wake quickly, took {:?} at iteration {}",
