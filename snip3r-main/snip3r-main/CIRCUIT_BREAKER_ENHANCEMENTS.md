@@ -262,7 +262,12 @@ if result.is_ok() {
 
 ## 6. Test Coverage
 
-Total: 60 tests (all passing) - ~60s execution time
+Total: 60 tests (all passing) - 59.94s execution time
+
+Note: Execution time increased from 23.38s (40 tests) to 59.94s (60 tests) due to:
+- 20 additional tests added in v2.1 for task management, cancellation, and concurrency
+- Many new tests involve timeouts, sleeps, and multi-threaded scenarios
+- Stress tests with 50+ concurrent tasks × 30 endpoints add significant runtime
 
 **Original Tests (21)**:
 - Basic functionality, state transitions, backoff, canary requests, etc.
@@ -304,17 +309,17 @@ Total: 60 tests (all passing) - ~60s execution time
 ## Acceptance Criteria Status
 
 ### v2.2 (Label-Based Metrics Migration)
-✅ **Metryki używają etykiet zamiast dynamicznych nazw** - All metrics migrated to label-based approach  
-✅ **Usunięto HashMap per-endpoint** - Replaced with IntGaugeVec, IntCounterVec, GaugeVec  
-✅ **Kod aktualizacji używa wyłącznie etykiet** - All update_metrics calls use get_metric_with_label_values  
-✅ **Zgodność z dobrymi praktykami Prometheus** - Fully compliant with Prometheus naming guidelines  
-✅ **Testy pokrywają migrację** - All 60 tests updated and passing (100% success rate)
+✅ **Metrics use labels instead of dynamic names** - All metrics migrated to label-based approach  
+✅ **Removed per-endpoint HashMap** - Replaced with IntGaugeVec, IntCounterVec, GaugeVec  
+✅ **Update code uses labels exclusively** - All update_metrics calls use get_metric_with_label_values  
+✅ **Prometheus best practices compliance** - Fully compliant with Prometheus naming guidelines  
+✅ **Tests cover migration** - All 60 tests updated and passing (100% success rate)
 
 ### v2.0 (Adaptive Thresholds & Health Scores)
-✅ **Adaptive threshold działa** - EWMA with configurable window (alpha) and sensitivity implemented  
-✅ **Health score liczy się i wpływa na state** - Health score [0,1] calculated from errors, latency, jitter and affects state transitions  
-✅ **Eksportują się metryki do Prometheusa/OTel** - 6 label-based metric families exported via Prometheus registry  
-✅ **Structured logs są obecne (info/warn)** - All state transitions logged with structured fields
+✅ **Adaptive threshold works** - EWMA with configurable window (alpha) and sensitivity implemented  
+✅ **Health score calculated and affects state** - Health score [0,1] calculated from errors, latency, jitter and affects state transitions  
+✅ **Metrics export to Prometheus/OTel** - 6 label-based metric families exported via Prometheus registry  
+✅ **Structured logs present (info/warn)** - All state transitions logged with structured fields
 
 ### v2.1 (Deterministic Termination & Reactive Cancellation)
 ✅ **Jawne i deterministyczne zatrzymywanie wszystkich tasków** - Two-phase shutdown implemented  
