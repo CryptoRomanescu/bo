@@ -28,8 +28,9 @@ pub struct BackoffStrategy {
 }
 
 impl BackoffStrategy {
-    /// Maximum attempt number to prevent overflow in exponential calculation (2^63)
-    /// This is the highest power of 2 that fits in a u64 without overflow
+    /// Maximum attempt number to prevent overflow in exponential calculation.
+    /// This value is used as the exponent in base * 2^attempt, capped at 63
+    /// because 2^64 would overflow u64.
     const MAX_ATTEMPT: u32 = 63;
 
     /// Create a new backoff strategy.
@@ -1220,8 +1221,7 @@ impl CircuitBreaker {
                     EndpointState::CoolingDown => {
                         health.cooldown_start = Some(Instant::now());
                         // Increment backoff strategy attempt counter
-                        health.backoff_strategy.attempt = 
-                            (health.backoff_strategy.attempt + 1).min(BackoffStrategy::MAX_ATTEMPT);
+                        health.backoff_strategy.attempt = (health.backoff_strategy.attempt + 1).min(BackoffStrategy::MAX_ATTEMPT);
                     }
                     EndpointState::Healthy => {
                         health.backoff_strategy.reset();
@@ -3062,8 +3062,8 @@ mod tests {
 
             // Verify attempt is capped
             assert!(
-                strategy.attempt <= BackoffStrategy::MAX_ATTEMPT, 
-                "Attempt should be capped at {}", 
+                strategy.attempt <= BackoffStrategy::MAX_ATTEMPT,
+                "Attempt should be capped at {}",
                 BackoffStrategy::MAX_ATTEMPT
             );
         }
