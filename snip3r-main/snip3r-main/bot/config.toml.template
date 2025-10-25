@@ -1,0 +1,59 @@
+# H-5N1P3R Oracle System Configuration
+# This is a template configuration file. Copy this to config.toml and adjust as needed.
+# IMPORTANT: Do not commit config.toml with real credentials to version control!
+
+# Database file path
+database_path = "decisions.db"
+
+# Solana RPC endpoint URL
+# For production, use a private/paid RPC endpoint and set via environment variable
+# Override with RPC_URL environment variable
+rpc_url = "https://api.mainnet-beta.solana.com"
+
+# Wallet public key for transaction monitoring
+# Override with WALLET_PUBKEY environment variable
+wallet_pubkey = "11111111111111111111111111111112"
+
+# RPC client timeout in seconds
+rpc_timeout_secs = 30
+
+# Channel buffer size for inter-component communication
+channel_buffer_size = 100
+
+# Logging level: trace, debug, info, warn, error
+log_level = "info"
+
+# Security Configuration (via environment variables)
+# METRICS_AUTH_TOKEN - Set this environment variable to enable authentication for metrics endpoint
+# Minimum 32 characters, use a cryptographically secure random string
+# Example: export METRICS_AUTH_TOKEN=$(openssl rand -base64 32)
+
+[perf_monitor]
+# Performance analysis interval in minutes
+analysis_interval_minutes = 15
+
+# Historical lookback period in hours
+lookback_hours = 24
+
+[tx_monitor]
+# Transaction check interval in milliseconds
+check_interval_ms = 1000
+
+[regime_detector]
+# Market regime analysis interval in seconds
+analysis_interval_secs = 60
+
+[smart_money]
+# Smart money tracking configuration
+# Detection window for smart wallet purchases (seconds)
+detection_window_secs = 60
+# Minimum number of smart wallets to trigger alert
+min_smart_wallets = 2
+# API cache duration (seconds)
+cache_duration_secs = 300
+# API request timeout (seconds)
+api_timeout_secs = 5
+# Enable Nansen integration (requires API key in environment)
+enable_nansen = false
+# Enable Birdeye integration (requires API key in environment)
+enable_birdeye = true

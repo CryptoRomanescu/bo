@@ -1,0 +1,38 @@
+# Prometheus configuration for H-5N1P3R monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'local'
+    environment: 'dev'
+
+# Scrape configurations
+scrape_configs:
+  # H-5N1P3R application metrics
+  - job_name: 'h-5n1p3r'
+    static_configs:
+      # For Docker on Linux, use the host IP
+      # - targets: ['172.17.0.1:9090']
+      
+      # For Docker Desktop (Mac/Windows), use host.docker.internal
+      - targets: ['host.docker.internal:9090']
+        labels:
+          instance: 'h-5n1p3r-main'
+    
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Alerting rules (optional)
+# rule_files:
+#   - 'alerts.yml'
+
+# Alertmanager configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['alertmanager:9093']
