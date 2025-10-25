@@ -2067,6 +2067,7 @@ dependencies = [
  "subtle",
  "tokio",
  "tokio-retry",
+ "tokio-util",
  "toml 0.8.23",
  "tracing",
  "tracing-opentelemetry",
