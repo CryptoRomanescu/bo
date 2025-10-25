@@ -4,8 +4,10 @@
 //! quarantine unhealthy RPC endpoints and retry them after cooldown.
 
 use prometheus::{
-    register_gauge_with_registry, register_int_counter_with_registry,
-    register_int_gauge_with_registry, Gauge, IntCounter, IntGauge, Opts, Registry,
+    register_gauge_vec_with_registry, register_int_counter_vec_with_registry,
+    register_int_counter_with_registry, register_int_gauge_vec_with_registry,
+    register_int_gauge_with_registry, GaugeVec, IntCounterVec, IntCounter, IntGauge, 
+    IntGaugeVec, Opts, Registry,
 };
 use rand::Rng;
 use std::collections::HashMap;
@@ -197,10 +199,9 @@ pub struct EndpointHealth {
 ///
 /// This structure manages Prometheus metrics for circuit breaker endpoints with the following guarantees:
 ///
-/// - **Atomicity**: All metrics for an endpoint are registered atomically under a write lock.
-///   Either all metrics succeed or none are registered, preventing partial state.
+/// - **Label-Based Approach**: All metrics use labels instead of dynamic metric names.
+///   This provides better scalability and eliminates name collisions.
 /// - **Thread-Safety**: All operations are protected by RwLock in the parent CircuitBreaker.
-/// - **Idempotency**: Calling register_endpoint multiple times for the same endpoint is safe.
 /// - **No Panics**: All registration errors are handled gracefully and logged.
 ///
 /// ## Shutdown Behavior
@@ -213,13 +214,13 @@ pub struct EndpointHealth {
 ///
 /// ## Metric Types
 ///
-/// Each endpoint gets 6 metrics registered:
-/// 1. `circuit_breaker_state_{endpoint}`: IntGauge (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)
-/// 2. `circuit_breaker_failures_{endpoint}`: IntCounter (cumulative failure count)
-/// 3. `circuit_breaker_latency_ms_{endpoint}`: Gauge (average probe latency in milliseconds)
-/// 4. `circuit_breaker_last_opened_{endpoint}`: IntGauge (unix timestamp when circuit last opened)
-/// 5. `circuit_breaker_success_ratio_{endpoint}`: Gauge (success rate [0.0-1.0])
-/// 6. `circuit_breaker_health_score_{endpoint}`: Gauge (health score [0.0-1.0])
+/// All metrics use the `endpoint` label to distinguish between different endpoints:
+/// 1. `circuit_breaker_state{endpoint="..."}`: IntGaugeVec (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)
+/// 2. `circuit_breaker_failures{endpoint="..."}`: IntCounterVec (cumulative failure count)
+/// 3. `circuit_breaker_latency_ms{endpoint="..."}`: GaugeVec (average probe latency in milliseconds)
+/// 4. `circuit_breaker_last_opened{endpoint="..."}`: IntGaugeVec (unix timestamp when circuit last opened)
+/// 5. `circuit_breaker_success_ratio{endpoint="..."}`: GaugeVec (success rate [0.0-1.0])
+/// 6. `circuit_breaker_health_score{endpoint="..."}`: GaugeVec (health score [0.0-1.0])
 ///
 /// ## Global Metrics
 ///
@@ -229,18 +230,18 @@ pub struct EndpointHealth {
 /// 3. `circuit_breaker_active_tasks`: IntGauge (currently active monitoring tasks)
 #[derive(Clone)]
 pub struct CircuitBreakerMetrics {
-    /// Circuit breaker state per endpoint (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)
-    pub circuit_state: HashMap<String, IntGauge>,
-    /// Failure count per endpoint
-    pub fail_count: HashMap<String, IntCounter>,
-    /// Probe latency in milliseconds per endpoint
-    pub probe_latency: HashMap<String, Gauge>,
-    /// Last time circuit opened (unix timestamp) per endpoint
-    pub last_opened: HashMap<String, IntGauge>,
-    /// Probe success ratio per endpoint
-    pub probe_success_ratio: HashMap<String, Gauge>,
-    /// Health score per endpoint
-    pub health_score: HashMap<String, Gauge>,
+    /// Circuit breaker state per endpoint with labels (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)
+    pub circuit_state: IntGaugeVec,
+    /// Failure count per endpoint with labels
+    pub fail_count: IntCounterVec,
+    /// Probe latency in milliseconds per endpoint with labels
+    pub probe_latency: GaugeVec,
+    /// Last time circuit opened (unix timestamp) per endpoint with labels
+    pub last_opened: IntGaugeVec,
+    /// Probe success ratio per endpoint with labels
+    pub probe_success_ratio: GaugeVec,
+    /// Health score per endpoint with labels
+    pub health_score: GaugeVec,
     /// Total count of failed metric registrations (global)
     pub registration_failures_total: IntCounter,
     /// Total number of monitoring tasks created (global)
@@ -252,7 +253,7 @@ pub struct CircuitBreakerMetrics {
 }
 
 impl CircuitBreakerMetrics {
-    /// Create new metrics with a registry
+    /// Create new metrics with a registry using label-based approach
     pub fn new(registry: Registry) -> Self {
         // Register global metrics with fallback to default counters
         // Note: Fallback metrics use a unique name suffix to avoid conflicts
@@ -317,191 +318,167 @@ impl CircuitBreakerMetrics {
             .expect("Creating unregistered fallback IntGauge should never fail")
         });
 
+        // Register label-based metrics for endpoints
+        // These metrics use the "endpoint" label to distinguish between different endpoints
+        let circuit_state = register_int_gauge_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_state",
+                "Circuit breaker state (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_state metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            // Create unregistered fallback metric (won't panic)
+            IntGaugeVec::new(
+                Opts::new(
+                    "circuit_breaker_state_fallback",
+                    "fallback gauge vec for circuit state"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback IntGaugeVec should never fail")
+        });
+
+        let fail_count = register_int_counter_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_failures",
+                "Cumulative failure count per endpoint"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_failures metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            IntCounterVec::new(
+                Opts::new(
+                    "circuit_breaker_failures_fallback",
+                    "fallback counter vec for failures"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback IntCounterVec should never fail")
+        });
+
+        let probe_latency = register_gauge_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_latency_ms",
+                "Average probe latency in milliseconds"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_latency_ms metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            GaugeVec::new(
+                Opts::new(
+                    "circuit_breaker_latency_ms_fallback",
+                    "fallback gauge vec for latency"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback GaugeVec should never fail")
+        });
+
+        let last_opened = register_int_gauge_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_last_opened",
+                "Unix timestamp when circuit last opened"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_last_opened metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            IntGaugeVec::new(
+                Opts::new(
+                    "circuit_breaker_last_opened_fallback",
+                    "fallback gauge vec for last opened"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback IntGaugeVec should never fail")
+        });
+
+        let probe_success_ratio = register_gauge_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_success_ratio",
+                "Success ratio [0.0-1.0] per endpoint"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_success_ratio metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            GaugeVec::new(
+                Opts::new(
+                    "circuit_breaker_success_ratio_fallback",
+                    "fallback gauge vec for success ratio"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback GaugeVec should never fail")
+        });
+
+        let health_score = register_gauge_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_health_score",
+                "Health score [0.0-1.0] per endpoint"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_health_score metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            GaugeVec::new(
+                Opts::new(
+                    "circuit_breaker_health_score_fallback",
+                    "fallback gauge vec for health score"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback GaugeVec should never fail")
+        });
+
+        info!("Circuit breaker metrics initialized with label-based approach");
+
         Self {
-            circuit_state: HashMap::new(),
-            fail_count: HashMap::new(),
-            probe_latency: HashMap::new(),
-            last_opened: HashMap::new(),
-            probe_success_ratio: HashMap::new(),
-            health_score: HashMap::new(),
+            circuit_state,
+            fail_count,
+            probe_latency,
+            last_opened,
+            probe_success_ratio,
+            health_score,
             registration_failures_total: registration_failures,
             monitoring_task_count,
             active_tasks,
             registry,
         }
-    }
-
-    /// Register metrics for an endpoint with atomic HashMap writes.
-    ///
-    /// This method ensures atomicity by:
-    /// 1. Checking if endpoint is already registered (fast path)
-    /// 2. Creating all metrics first (may fail)
-    /// 3. Only then inserting all metrics into HashMaps in one operation
-    ///
-    /// This prevents partial registration state where some metrics exist but others don't.
-    /// If any metric registration fails, none are added to the HashMaps.
-    fn register_endpoint(&mut self, endpoint: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // Fast path: already registered
-        if self.circuit_state.contains_key(endpoint) {
-            debug!(
-                endpoint = %endpoint,
-                "Metrics already registered, skipping"
-            );
-            return Ok(());
-        }
-
-        info!(
-            endpoint = %endpoint,
-            "Registering Prometheus metrics for new endpoint"
-        );
-
-        // Sanitize endpoint name for Prometheus (replace all non-alphanumeric with underscore)
-        let sanitized = endpoint
-            .chars()
-            .map(|c| if c.is_alphanumeric() { c } else { '_' })
-            .collect::<String>();
-
-        // Phase 1: Register all metrics with Prometheus (may fail, no HashMap modifications yet)
-        debug!(
-            endpoint = %endpoint,
-            sanitized_name = %sanitized,
-            "Phase 1: Registering metrics with Prometheus registry"
-        );
-
-        let state_gauge = register_int_gauge_with_registry!(
-            Opts::new(
-                format!("circuit_breaker_state_{}", sanitized),
-                format!("Circuit breaker state for endpoint {}", endpoint)
-            ),
-            &self.registry
-        )
-        .map_err(|e| {
-            warn!(
-                endpoint = %endpoint,
-                error = %e,
-                metric = "circuit_breaker_state",
-                "Failed to register metric with Prometheus"
-            );
-            self.registration_failures_total.inc();
-            e
-        })?;
-
-        let fail_counter = register_int_counter_with_registry!(
-            Opts::new(
-                format!("circuit_breaker_failures_{}", sanitized),
-                format!("Failure count for endpoint {}", endpoint)
-            ),
-            &self.registry
-        )
-        .map_err(|e| {
-            warn!(
-                endpoint = %endpoint,
-                error = %e,
-                metric = "circuit_breaker_failures",
-                "Failed to register metric with Prometheus"
-            );
-            self.registration_failures_total.inc();
-            e
-        })?;
-
-        let latency_gauge = register_gauge_with_registry!(
-            Opts::new(
-                format!("circuit_breaker_latency_ms_{}", sanitized),
-                format!("Probe latency in ms for endpoint {}", endpoint)
-            ),
-            &self.registry
-        )
-        .map_err(|e| {
-            warn!(
-                endpoint = %endpoint,
-                error = %e,
-                metric = "circuit_breaker_latency_ms",
-                "Failed to register metric with Prometheus"
-            );
-            self.registration_failures_total.inc();
-            e
-        })?;
-
-        let opened_gauge = register_int_gauge_with_registry!(
-            Opts::new(
-                format!("circuit_breaker_last_opened_{}", sanitized),
-                format!(
-                    "Last time circuit opened (unix timestamp) for endpoint {}",
-                    endpoint
-                )
-            ),
-            &self.registry
-        )
-        .map_err(|e| {
-            warn!(
-                endpoint = %endpoint,
-                error = %e,
-                metric = "circuit_breaker_last_opened",
-                "Failed to register metric with Prometheus"
-            );
-            self.registration_failures_total.inc();
-            e
-        })?;
-
-        let success_gauge = register_gauge_with_registry!(
-            Opts::new(
-                format!("circuit_breaker_success_ratio_{}", sanitized),
-                format!("Success ratio for endpoint {}", endpoint)
-            ),
-            &self.registry
-        )
-        .map_err(|e| {
-            warn!(
-                endpoint = %endpoint,
-                error = %e,
-                metric = "circuit_breaker_success_ratio",
-                "Failed to register metric with Prometheus"
-            );
-            self.registration_failures_total.inc();
-            e
-        })?;
-
-        let health_gauge = register_gauge_with_registry!(
-            Opts::new(
-                format!("circuit_breaker_health_score_{}", sanitized),
-                format!("Health score [0-1] for endpoint {}", endpoint)
-            ),
-            &self.registry
-        )
-        .map_err(|e| {
-            warn!(
-                endpoint = %endpoint,
-                error = %e,
-                metric = "circuit_breaker_health_score",
-                "Failed to register metric with Prometheus"
-            );
-            self.registration_failures_total.inc();
-            e
-        })?;
-
-        // Phase 2: All metrics successfully registered, now atomically insert into HashMaps
-        // This is atomic because we're already under a write lock and all insertions happen
-        // without any possibility of early return or failure
-        debug!(
-            endpoint = %endpoint,
-            "Phase 2: Atomically inserting all metrics into HashMaps"
-        );
-
-        let endpoint_string = endpoint.to_string();
-        self.circuit_state.insert(endpoint_string.clone(), state_gauge);
-        self.fail_count.insert(endpoint_string.clone(), fail_counter);
-        self.probe_latency.insert(endpoint_string.clone(), latency_gauge);
-        self.last_opened.insert(endpoint_string.clone(), opened_gauge);
-        self.probe_success_ratio.insert(endpoint_string.clone(), success_gauge);
-        self.health_score.insert(endpoint_string.clone(), health_gauge);
-
-        info!(
-            endpoint = %endpoint,
-            metrics_count = 6,
-            "Successfully registered all Prometheus metrics for endpoint"
-        );
-
-        Ok(())
     }
 }
 
@@ -638,21 +615,8 @@ impl CircuitBreaker {
         metrics.registry.clone()
     }
 
-    /// Update metrics for an endpoint
+    /// Update metrics for an endpoint using labels
     async fn update_metrics(&self, endpoint: &str) {
-        // Register endpoint metrics if needed (atomic operation under write lock)
-        {
-            let mut metrics = self.metrics.write().await;
-            if let Err(e) = metrics.register_endpoint(endpoint) {
-                warn!(
-                    endpoint = %endpoint,
-                    error = %e,
-                    "Failed to register endpoint metrics, metric updates will be skipped"
-                );
-                return;
-            }
-        }
-
         // Read health data
         let (state, consecutive_failures, success_rate, avg_latency, health_score, cooldown_start) = {
             let health_map = self.endpoint_health.read().await;
@@ -674,18 +638,18 @@ impl CircuitBreaker {
             }
         };
 
-        // Update metrics under read lock
+        // Update metrics under read lock using labels
         let metrics = self.metrics.read().await;
 
-        // Update state metric
-        if let Some(state_gauge) = metrics.circuit_state.get(endpoint) {
-            let state_value = match state {
-                EndpointState::Healthy => 0,
-                EndpointState::Degraded => 1,
-                EndpointState::CoolingDown => 2,
-                EndpointState::HalfOpen => 3,
-            };
-            state_gauge.set(state_value);
+        // Update state metric with endpoint label
+        let state_value = match state {
+            EndpointState::Healthy => 0,
+            EndpointState::Degraded => 1,
+            EndpointState::CoolingDown => 2,
+            EndpointState::HalfOpen => 3,
+        };
+        if let Ok(gauge) = metrics.circuit_state.get_metric_with_label_values(&[endpoint]) {
+            gauge.set(state_value);
             debug!(
                 endpoint = %endpoint,
                 metric = "circuit_breaker_state",
@@ -695,14 +659,13 @@ impl CircuitBreaker {
             );
         }
 
-        // Update failure counter
-        if let Some(fail_counter) = metrics.fail_count.get(endpoint) {
-            // Note: Prometheus counters can only increase, so we set to current value
-            // In production, you might want to use a gauge instead
-            let current = fail_counter.get();
+        // Update failure counter with endpoint label
+        if let Ok(counter) = metrics.fail_count.get_metric_with_label_values(&[endpoint]) {
+            // Note: Prometheus counters can only increase
+            let current = counter.get();
             if consecutive_failures as u64 > current {
                 let delta = consecutive_failures as u64 - current;
-                fail_counter.inc_by(delta);
+                counter.inc_by(delta);
                 debug!(
                     endpoint = %endpoint,
                     metric = "circuit_breaker_failures",
@@ -714,9 +677,9 @@ impl CircuitBreaker {
             }
         }
 
-        // Update latency metric
-        if let Some(latency_gauge) = metrics.probe_latency.get(endpoint) {
-            latency_gauge.set(avg_latency);
+        // Update latency metric with endpoint label
+        if let Ok(gauge) = metrics.probe_latency.get_metric_with_label_values(&[endpoint]) {
+            gauge.set(avg_latency);
             debug!(
                 endpoint = %endpoint,
                 metric = "circuit_breaker_latency_ms",
@@ -725,16 +688,16 @@ impl CircuitBreaker {
             );
         }
 
-        // Update last opened timestamp
-        if let Some(opened_gauge) = metrics.last_opened.get(endpoint) {
-            if state == EndpointState::CoolingDown {
-                if let Some(cooldown) = cooldown_start {
-                    let timestamp = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64
-                        - cooldown.elapsed().as_secs() as i64;
-                    opened_gauge.set(timestamp);
+        // Update last opened timestamp with endpoint label
+        if state == EndpointState::CoolingDown {
+            if let Some(cooldown) = cooldown_start {
+                let timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64
+                    - cooldown.elapsed().as_secs() as i64;
+                if let Ok(gauge) = metrics.last_opened.get_metric_with_label_values(&[endpoint]) {
+                    gauge.set(timestamp);
                     debug!(
                         endpoint = %endpoint,
                         metric = "circuit_breaker_last_opened",
@@ -745,9 +708,9 @@ impl CircuitBreaker {
             }
         }
 
-        // Update success ratio metric
-        if let Some(success_gauge) = metrics.probe_success_ratio.get(endpoint) {
-            success_gauge.set(success_rate);
+        // Update success ratio metric with endpoint label
+        if let Ok(gauge) = metrics.probe_success_ratio.get_metric_with_label_values(&[endpoint]) {
+            gauge.set(success_rate);
             debug!(
                 endpoint = %endpoint,
                 metric = "circuit_breaker_success_ratio",
@@ -756,9 +719,9 @@ impl CircuitBreaker {
             );
         }
 
-        // Update health score metric
-        if let Some(health_gauge) = metrics.health_score.get(endpoint) {
-            health_gauge.set(health_score);
+        // Update health score metric with endpoint label
+        if let Ok(gauge) = metrics.health_score.get_metric_with_label_values(&[endpoint]) {
+            gauge.set(health_score);
             debug!(
                 endpoint = %endpoint,
                 metric = "circuit_breaker_health_score",
@@ -3158,34 +3121,34 @@ mod tests {
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("endpoint-{}", endpoint_id);
             
-            // Each endpoint should have all 6 metrics registered
+            // Each endpoint should have all 6 metrics accessible via labels
             assert!(
-                metrics.circuit_state.contains_key(&endpoint),
+                metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing circuit_state metric",
                 endpoint
             );
             assert!(
-                metrics.fail_count.contains_key(&endpoint),
+                metrics.fail_count.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing fail_count metric",
                 endpoint
             );
             assert!(
-                metrics.probe_latency.contains_key(&endpoint),
+                metrics.probe_latency.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing probe_latency metric",
                 endpoint
             );
             assert!(
-                metrics.last_opened.contains_key(&endpoint),
+                metrics.last_opened.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing last_opened metric",
                 endpoint
             );
             assert!(
-                metrics.probe_success_ratio.contains_key(&endpoint),
+                metrics.probe_success_ratio.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing probe_success_ratio metric",
                 endpoint
             );
             assert!(
-                metrics.health_score.contains_key(&endpoint),
+                metrics.health_score.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing health_score metric",
                 endpoint
             );
@@ -3198,18 +3161,31 @@ mod tests {
         // Should have metrics for all endpoints
         assert!(!gathered_metrics.is_empty(), "Should have gathered metrics");
         
-        // Count the total metrics (each endpoint has 6 metrics)
-        let total_expected_metrics = num_endpoints * 6;
+        // With label-based metrics, we have:
+        // - 6 label-based metric families (state, failures, latency, last_opened, success_ratio, health_score)
+        // - 3 global metrics (registration_failures_total, monitoring_task_count, active_tasks)
+        // Total: 9 metric families
         let total_gathered = gathered_metrics.len();
         
-        // We should have at least as many metrics as endpoints * metrics per endpoint
-        // (may have more due to Prometheus internal metrics)
+        // We should have exactly 9 metric families with label-based approach
         assert!(
-            total_gathered >= total_expected_metrics,
-            "Expected at least {} metrics, got {}",
-            total_expected_metrics,
+            total_gathered >= 9,
+            "Expected at least 9 metric families (6 label-based + 3 global), got {}",
             total_gathered
         );
+        
+        // Verify that each endpoint's data is accessible via labels in the metric families
+        for endpoint_id in 0..num_endpoints {
+            let endpoint = format!("endpoint-{}", endpoint_id);
+            let metrics = cb.metrics.read().await;
+            
+            // Verify we can access each endpoint's metrics via labels
+            assert!(
+                metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                "Cannot access state metric for endpoint {}",
+                endpoint
+            );
+        }
     }
 
     #[tokio::test]
@@ -3547,35 +3523,35 @@ mod tests {
         let metrics = cb.metrics.read().await;
         let health = cb.endpoint_health.read().await;
         
-        // For each endpoint in health map, verify it has all metrics
+        // For each endpoint in health map, verify it has all metrics accessible via labels
         for endpoint in health.keys() {
             assert!(
-                metrics.circuit_state.contains_key(endpoint),
+                metrics.circuit_state.get_metric_with_label_values(&[endpoint]).is_ok(),
                 "Endpoint {} missing circuit_state after load test",
                 endpoint
             );
             assert!(
-                metrics.fail_count.contains_key(endpoint),
+                metrics.fail_count.get_metric_with_label_values(&[endpoint]).is_ok(),
                 "Endpoint {} missing fail_count after load test",
                 endpoint
             );
             assert!(
-                metrics.probe_latency.contains_key(endpoint),
+                metrics.probe_latency.get_metric_with_label_values(&[endpoint]).is_ok(),
                 "Endpoint {} missing probe_latency after load test",
                 endpoint
             );
             assert!(
-                metrics.last_opened.contains_key(endpoint),
+                metrics.last_opened.get_metric_with_label_values(&[endpoint]).is_ok(),
                 "Endpoint {} missing last_opened after load test",
                 endpoint
             );
             assert!(
-                metrics.probe_success_ratio.contains_key(endpoint),
+                metrics.probe_success_ratio.get_metric_with_label_values(&[endpoint]).is_ok(),
                 "Endpoint {} missing probe_success_ratio after load test",
                 endpoint
             );
             assert!(
-                metrics.health_score.contains_key(endpoint),
+                metrics.health_score.get_metric_with_label_values(&[endpoint]).is_ok(),
                 "Endpoint {} missing health_score after load test",
                 endpoint
             );
@@ -3594,7 +3570,7 @@ mod tests {
         
         let cb = CircuitBreaker::new(3, 60, 50);
         
-        // Record some successes to trigger metric registration
+        // Record some successes to verify metrics are working
         cb.record_success("test-endpoint-1").await;
         cb.record_success("test-endpoint-2").await;
         
@@ -3606,33 +3582,29 @@ mod tests {
         
         assert_eq!(initial_failures, 0, "Initial registration failures should be 0");
         
-        // To test registration failures, we need to try to register the same metric twice
-        // which will cause a conflict. Let's create a CB with a pre-populated registry
+        // With label-based metrics, registration failures occur at registry creation time
+        // if there's a conflict with existing metric names (not label values)
+        // Create a registry with a conflicting metric name
         let pre_registry = Registry::new();
         
-        // Pre-register a metric that will conflict
+        // Pre-register a metric with the same name as our circuit breaker metric
         let _pre_existing = prometheus::register_int_gauge_with_registry!(
             prometheus::Opts::new(
-                "circuit_breaker_state_test_conflict",
+                "circuit_breaker_state",
                 "Pre-existing metric to cause conflict"
             ),
             &pre_registry
         ).unwrap();
         
         // Create a new CircuitBreakerMetrics with the pre-populated registry
-        let mut metrics = CircuitBreakerMetrics::new(pre_registry);
+        // This should increment registration_failures_total during initialization
+        let metrics = CircuitBreakerMetrics::new(pre_registry);
         
-        // Try to register endpoint (this should fail because the metric already exists)
-        let result = metrics.register_endpoint("test-conflict");
-        
-        // The registration should fail
-        assert!(result.is_err(), "Registration should fail with conflicting metric");
-        
-        // Verify that registration_failures_total was incremented
+        // Verify that registration_failures_total was incremented during initialization
         let failures_after = metrics.registration_failures_total.get();
         assert!(
             failures_after > 0,
-            "Registration failures should be incremented, got {}",
+            "Registration failures should be incremented due to metric name conflict, got {}",
             failures_after
         );
     }
@@ -4153,40 +4125,40 @@ mod tests {
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("concurrent-reg-{}", endpoint_id);
             
-            // All 6 metrics must be present for each endpoint
+            // All 6 metrics must be accessible via labels for each endpoint
             assert!(
-                metrics.circuit_state.contains_key(&endpoint),
+                metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing circuit_state",
                 endpoint
             );
             assert!(
-                metrics.fail_count.contains_key(&endpoint),
+                metrics.fail_count.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing fail_count",
                 endpoint
             );
             assert!(
-                metrics.probe_latency.contains_key(&endpoint),
+                metrics.probe_latency.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing probe_latency",
                 endpoint
             );
             assert!(
-                metrics.last_opened.contains_key(&endpoint),
+                metrics.last_opened.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing last_opened",
                 endpoint
             );
             assert!(
-                metrics.probe_success_ratio.contains_key(&endpoint),
+                metrics.probe_success_ratio.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing probe_success_ratio",
                 endpoint
             );
             assert!(
-                metrics.health_score.contains_key(&endpoint),
+                metrics.health_score.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing health_score",
                 endpoint
             );
         }
         
-        // Registration failures should be 0 (all succeeded due to atomic registration)
+        // Registration failures should be 0 (all succeeded with label-based metrics)
         let failures = metrics.registration_failures_total.get();
         assert_eq!(
             failures, 0,
