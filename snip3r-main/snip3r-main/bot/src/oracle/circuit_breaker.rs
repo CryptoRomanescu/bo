@@ -4325,4 +4325,129 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn test_consecutive_failures_and_failures_total_semantics() {
+        // Test: Verify correct Prometheus semantics for the new metrics
+        //
+        // This validates that:
+        // 1. consecutive_failures (Gauge) can increase and decrease
+        // 2. failures_total (Counter) only increases, never decreases
+        // 3. Both metrics track failures independently
+        
+        let cb = CircuitBreaker::new(5, 60, 50);
+        let endpoint = "test-endpoint";
+        
+        // Initial state: both metrics should be zero (or not exist yet)
+        
+        // Record first failure
+        cb.record_failure(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 1, "Consecutive failures should be 1 after first failure");
+            assert_eq!(total, 1, "Total failures should be 1 after first failure");
+        }
+        
+        // Record second failure
+        cb.record_failure(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 2, "Consecutive failures should be 2 after second failure");
+            assert_eq!(total, 2, "Total failures should be 2 after second failure");
+        }
+        
+        // Record a success - this should reset consecutive failures but not total
+        cb.record_success(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 0, "Consecutive failures should reset to 0 after success");
+            assert_eq!(total, 2, "Total failures should remain 2 (Counter never decreases)");
+        }
+        
+        // Record another failure
+        cb.record_failure(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 1, "Consecutive failures should be 1 after new failure");
+            assert_eq!(total, 3, "Total failures should be 3 (incremented from 2)");
+        }
+        
+        // Record multiple failures and then success to verify gauge can fluctuate
+        for _ in 0..3 {
+            cb.record_failure(endpoint).await;
+        }
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 4, "Consecutive failures should be 4 after 3 more failures");
+            assert_eq!(total, 6, "Total failures should be 6 (3 + 3)");
+        }
+        
+        // Another success should reset consecutive but not total
+        cb.record_success(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 0, "Consecutive failures should reset to 0 again");
+            assert_eq!(total, 6, "Total failures should remain 6 (Counter only increases)");
+        }
+    }
 }
