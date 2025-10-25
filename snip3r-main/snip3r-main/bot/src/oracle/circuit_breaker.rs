@@ -4428,8 +4428,8 @@ mod tests {
                 .unwrap()
                 .get();
             
-            assert_eq!(consecutive, 4, "Consecutive failures should be 4 after 3 more failures");
-            assert_eq!(total, 6, "Total failures should be 6 (3 + 3)");
+            assert_eq!(consecutive, 4, "Consecutive failures should be 4 (1 + 3 more failures)");
+            assert_eq!(total, 6, "Total failures should be 6 (accumulated from all previous failures)");
         }
         
         // Another success should reset consecutive but not total
