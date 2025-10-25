@@ -37,6 +37,27 @@ impl BackoffStrategy {
         }
     }
 
+    /// Calculate delay for current attempt with exponential backoff and ±30% jitter.
+    /// This method does not increment the attempt counter.
+    pub fn current_delay(&self) -> Duration {
+        // Use current attempt without incrementing
+        let attempt = self.attempt;
+
+        // Calculate exponential backoff: base * 2^attempt
+        // Using saturating_mul as a safety net
+        let exponential_delay = self
+            .base_delay_ms
+            .saturating_mul(2u64.saturating_pow(attempt));
+        let capped_delay = exponential_delay.min(self.max_delay_ms);
+
+        // Apply ±30% jitter
+        let mut rng = rand::thread_rng();
+        let jitter_factor = rng.gen_range(0.7..=1.3);
+        let jittered_ms = (capped_delay as f64 * jitter_factor) as u64;
+
+        Duration::from_millis(jittered_ms)
+    }
+
     /// Calculate next delay with exponential backoff and ±30% jitter.
     pub fn next_delay(&mut self) -> Duration {
         // Increment attempt, but cap at 63 to prevent overflow (2^64 would overflow u64)
@@ -149,8 +170,6 @@ pub struct EndpointHealth {
     pub canary_successes: u32,
     /// Adaptive failure threshold based on recent error rate
     pub adaptive_threshold: u32,
-    /// Current backoff multiplier for retry delays (kept for backwards compatibility)
-    pub backoff_multiplier: u32,
     /// Backoff strategy for exponential backoff with jitter
     pub backoff_strategy: BackoffStrategy,
     /// Timestamp when half-open state started
@@ -933,7 +952,10 @@ impl CircuitBreaker {
             if let Some(health) = health {
                 let cooldown_info = health
                     .cooldown_start
-                    .map(|start| (start, health.backoff_multiplier));
+                    .map(|start| {
+                        // Clone the backoff strategy to calculate delay outside the lock
+                        (start, health.backoff_strategy.clone())
+                    });
                 (health.state.clone(), health.canary_count, cooldown_info)
             } else {
                 // New endpoint, create with defaults
@@ -959,8 +981,9 @@ impl CircuitBreaker {
             }
             EndpointState::CoolingDown => {
                 // Check if cooldown period has expired
-                if let Some((cooldown_start, backoff_multiplier)) = cooldown_info {
-                    let backoff_duration = self.calculate_backoff(backoff_multiplier);
+                if let Some((cooldown_start, backoff_strategy)) = cooldown_info {
+                    // Calculate the delay using BackoffStrategy's current attempt (without incrementing)
+                    let backoff_duration = backoff_strategy.current_delay();
 
                     if cooldown_start.elapsed() >= backoff_duration {
                         // Transition to half-open state with short write lock
@@ -1192,19 +1215,16 @@ impl CircuitBreaker {
                 match new_state {
                     EndpointState::CoolingDown => {
                         health.cooldown_start = Some(Instant::now());
-                        health.backoff_multiplier =
-                            (health.backoff_multiplier * 2).min(self.max_backoff);
-                        health.backoff_strategy.attempt += 1;
+                        // Increment backoff strategy attempt counter
+                        health.backoff_strategy.attempt = (health.backoff_strategy.attempt + 1).min(63);
                     }
                     EndpointState::Healthy => {
-                        health.backoff_multiplier = 1;
                         health.backoff_strategy.reset();
                     }
                     EndpointState::Degraded => {
                         if old_state == EndpointState::HalfOpen {
                             // Successful canary
                             health.consecutive_failures = 0;
-                            health.backoff_multiplier = 1;
                             health.backoff_strategy.reset();
                             health.canary_count = 0;
                             health.canary_successes = 0;
@@ -1222,19 +1242,6 @@ impl CircuitBreaker {
         if let Some(new_state) = new_state_opt {
             self.notify_state_change(endpoint, old_state, new_state);
         }
-    }
-
-    /// Calculate backoff duration with jitter (kept for compatibility with old backoff_multiplier).
-    fn calculate_backoff(&self, multiplier: u32) -> Duration {
-        let base_duration = Duration::from_secs(self.base_backoff_seconds);
-        let backoff_duration = base_duration * multiplier;
-
-        // Add jitter: randomize between 70% and 130% for ±30% jitter
-        let mut rng = rand::thread_rng();
-        let jitter_factor = rng.gen_range(0.7..=1.3);
-        let jittered_secs = (backoff_duration.as_secs_f64() * jitter_factor) as u64;
-
-        Duration::from_secs(jittered_secs)
     }
 
     /// Notify state change via callback.
@@ -1300,7 +1307,6 @@ impl CircuitBreaker {
                         total_attempts: health.total_attempts,
                         successful_attempts: health.successful_attempts,
                         adaptive_threshold: health.adaptive_threshold,
-                        backoff_multiplier: health.backoff_multiplier,
                         canary_progress: if health.state == EndpointState::HalfOpen {
                             Some((health.canary_successes, health.canary_count))
                         } else {
@@ -1347,7 +1353,6 @@ impl CircuitBreaker {
             health.canary_count = 0;
             health.canary_successes = 0;
             health.adaptive_threshold = self.failure_threshold;
-            health.backoff_multiplier = 1;
             health.backoff_strategy.reset();
             health.half_open_start = None;
             health.ewma_error_rate = EWMA::new(self.ewma_alpha);
@@ -1723,7 +1728,6 @@ impl EndpointHealth {
             canary_count: 0,
             canary_successes: 0,
             adaptive_threshold: 5, // Default, will be updated
-            backoff_multiplier: 1,
             backoff_strategy: BackoffStrategy::new(base_delay_ms, max_delay_ms),
             half_open_start: None,
             ewma_error_rate: EWMA::new(ewma_alpha),
@@ -1887,7 +1891,6 @@ pub struct EndpointHealthStats {
     pub total_attempts: usize,
     pub successful_attempts: usize,
     pub adaptive_threshold: u32,
-    pub backoff_multiplier: u32,
     pub canary_progress: Option<(u32, u32)>, // (successes, total) for half-open state
     pub health_score: f64,
     pub avg_latency_ms: f64,
@@ -2116,8 +2119,8 @@ mod tests {
             EndpointState::CoolingDown
         );
 
-        // Wait for cooldown to expire
-        sleep(Duration::from_secs(2)).await;
+        // Wait for cooldown to expire (base=1s * 2^1 * max_jitter=1.3 = 2.6s)
+        sleep(Duration::from_secs(3)).await;
 
         // Check availability - should transition to half-open
         assert!(cb.is_available("test-canary").await);
@@ -2151,8 +2154,8 @@ mod tests {
             EndpointState::CoolingDown
         );
 
-        // Wait for cooldown to expire
-        sleep(Duration::from_secs(2)).await;
+        // Wait for cooldown to expire (base=1s * 2^1 * max_jitter=1.3 = 2.6s)
+        sleep(Duration::from_secs(3)).await;
 
         // Check availability - should transition to half-open
         assert!(cb.is_available("test-canary-fail").await);
@@ -2182,14 +2185,14 @@ mod tests {
             cb.record_failure("test-backoff").await;
         }
 
-        let stats1 = cb.get_health_stats().await;
-        let backoff1 = stats1
-            .get("test-backoff")
-            .expect("test-backoff endpoint should exist")
-            .backoff_multiplier;
-        assert_eq!(backoff1, 2); // First backoff
+        // Check that the backoff strategy has been incremented
+        {
+            let health_map = cb.endpoint_health.read().await;
+            let health = health_map.get("test-backoff").expect("test-backoff endpoint should exist");
+            assert_eq!(health.backoff_strategy.attempt, 1); // First cooldown
+        }
 
-        // Wait long enough for cooldown to expire (base=2s * multiplier=2 * max_jitter=1.3 = 5.2s)
+        // Wait long enough for cooldown to expire (base=2s * 2^1 * max_jitter=1.3 ≈ 5.2s)
         sleep(Duration::from_secs(6)).await;
         assert!(cb.is_available("test-backoff").await); // Enter half-open
 
@@ -2198,12 +2201,12 @@ mod tests {
         cb.record_failure("test-backoff").await;
         cb.record_failure("test-backoff").await;
 
-        let stats2 = cb.get_health_stats().await;
-        let backoff2 = stats2
-            .get("test-backoff")
-            .expect("test-backoff endpoint should exist")
-            .backoff_multiplier;
-        assert_eq!(backoff2, 4); // Exponential increase
+        // Check that the backoff strategy has been incremented again
+        {
+            let health_map = cb.endpoint_health.read().await;
+            let health = health_map.get("test-backoff").expect("test-backoff endpoint should exist");
+            assert_eq!(health.backoff_strategy.attempt, 2); // Exponential increase
+        }
     }
 
     #[tokio::test]
