@@ -28,6 +28,10 @@ pub struct BackoffStrategy {
 }
 
 impl BackoffStrategy {
+    /// Maximum attempt number to prevent overflow in exponential calculation (2^63)
+    /// This is the highest power of 2 that fits in a u64 without overflow
+    const MAX_ATTEMPT: u32 = 63;
+
     /// Create a new backoff strategy.
     pub fn new(base_delay_ms: u64, max_delay_ms: u64) -> Self {
         Self {
@@ -60,11 +64,11 @@ impl BackoffStrategy {
 
     /// Calculate next delay with exponential backoff and ±30% jitter.
     pub fn next_delay(&mut self) -> Duration {
-        // Increment attempt, but cap at 63 to prevent overflow (2^64 would overflow u64)
-        self.attempt = (self.attempt + 1).min(63);
+        // Increment attempt, but cap at MAX_ATTEMPT to prevent overflow (2^64 would overflow u64)
+        self.attempt = (self.attempt + 1).min(Self::MAX_ATTEMPT);
 
         // Calculate exponential backoff: base * 2^attempt
-        // Using saturating_mul as a safety net, though attempt is capped at 63
+        // Using saturating_mul as a safety net, though attempt is capped at MAX_ATTEMPT
         let exponential_delay = self
             .base_delay_ms
             .saturating_mul(2u64.saturating_pow(self.attempt));
@@ -1216,7 +1220,8 @@ impl CircuitBreaker {
                     EndpointState::CoolingDown => {
                         health.cooldown_start = Some(Instant::now());
                         // Increment backoff strategy attempt counter
-                        health.backoff_strategy.attempt = (health.backoff_strategy.attempt + 1).min(63);
+                        health.backoff_strategy.attempt = 
+                            (health.backoff_strategy.attempt + 1).min(BackoffStrategy::MAX_ATTEMPT);
                     }
                     EndpointState::Healthy => {
                         health.backoff_strategy.reset();
@@ -2984,7 +2989,7 @@ mod tests {
         let mut prev_delay = Duration::from_millis(0);
 
         // Test that backoff remains stable even with very long retry sequences
-        // The attempt counter should cap at 63 to prevent overflow
+        // The attempt counter should cap at MAX_ATTEMPT to prevent overflow
         for i in 1..=100 {
             let delay = strategy.next_delay();
 
@@ -3000,8 +3005,8 @@ mod tests {
                 i
             );
 
-            // After attempt 63, the delay should stabilize (stay at max)
-            if i > 63 {
+            // After attempt MAX_ATTEMPT, the delay should stabilize (stay at max)
+            if i > BackoffStrategy::MAX_ATTEMPT as usize {
                 // Both delays should be at or near max_delay_ms (100_000_000)
                 // accounting for jitter (±30%), so between 70M and 130M
                 assert!(
@@ -3012,10 +3017,11 @@ mod tests {
                 );
             }
 
-            // Verify attempt counter is capped at 63
+            // Verify attempt counter is capped at MAX_ATTEMPT
             assert!(
-                strategy.attempt <= 63,
-                "Attempt counter should be capped at 63, got {} at iteration {}",
+                strategy.attempt <= BackoffStrategy::MAX_ATTEMPT,
+                "Attempt counter should be capped at {}, got {} at iteration {}",
+                BackoffStrategy::MAX_ATTEMPT,
                 strategy.attempt,
                 i
             );
@@ -3023,10 +3029,11 @@ mod tests {
             prev_delay = delay;
         }
 
-        // Final verification: attempt should be exactly 63 after 100 iterations
+        // Final verification: attempt should be exactly MAX_ATTEMPT after 100 iterations
         assert_eq!(
-            strategy.attempt, 63,
-            "Attempt should be capped at 63 after many retries"
+            strategy.attempt, BackoffStrategy::MAX_ATTEMPT,
+            "Attempt should be capped at {} after many retries",
+            BackoffStrategy::MAX_ATTEMPT
         );
 
         // Test reset works after long sequence
@@ -3054,17 +3061,21 @@ mod tests {
             assert!(delay.as_millis() > 0);
 
             // Verify attempt is capped
-            assert!(strategy.attempt <= 63, "Attempt should be capped at 63");
+            assert!(
+                strategy.attempt <= BackoffStrategy::MAX_ATTEMPT, 
+                "Attempt should be capped at {}", 
+                BackoffStrategy::MAX_ATTEMPT
+            );
         }
 
-        // At this point, attempt should be exactly 63
-        assert_eq!(strategy.attempt, 63);
+        // At this point, attempt should be exactly MAX_ATTEMPT
+        assert_eq!(strategy.attempt, BackoffStrategy::MAX_ATTEMPT);
 
-        // Further calls should maintain attempt at 63
+        // Further calls should maintain attempt at MAX_ATTEMPT
         strategy.next_delay();
-        assert_eq!(strategy.attempt, 63);
+        assert_eq!(strategy.attempt, BackoffStrategy::MAX_ATTEMPT);
         strategy.next_delay();
-        assert_eq!(strategy.attempt, 63);
+        assert_eq!(strategy.attempt, BackoffStrategy::MAX_ATTEMPT);
     }
 
     #[tokio::test]
@@ -3085,12 +3096,12 @@ mod tests {
         assert!(delay1.as_millis() >= 3500 && delay1.as_millis() <= 6500);
         assert!(delay2.as_millis() >= 3500 && delay2.as_millis() <= 6500);
 
-        // Test that attempt 63 produces a valid delay
+        // Test that attempt at MAX_ATTEMPT produces a valid delay
         let mut edge_strategy = BackoffStrategy::new(1000, u64::MAX);
-        edge_strategy.attempt = 62; // Set to 62, next call will set it to 63
-        let delay_at_63 = edge_strategy.next_delay();
-        assert_eq!(edge_strategy.attempt, 63);
-        assert!(delay_at_63.as_millis() > 0);
+        edge_strategy.attempt = BackoffStrategy::MAX_ATTEMPT - 1; // Set to MAX_ATTEMPT - 1, next call will set it to MAX_ATTEMPT
+        let delay_at_max = edge_strategy.next_delay();
+        assert_eq!(edge_strategy.attempt, BackoffStrategy::MAX_ATTEMPT);
+        assert!(delay_at_max.as_millis() > 0);
     }
 
     #[tokio::test]
