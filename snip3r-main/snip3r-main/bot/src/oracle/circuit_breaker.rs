@@ -216,11 +216,12 @@ pub struct EndpointHealth {
 ///
 /// All metrics use the `endpoint` label to distinguish between different endpoints:
 /// 1. `circuit_breaker_state{endpoint="..."}`: IntGaugeVec (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)
-/// 2. `circuit_breaker_failures{endpoint="..."}`: IntCounterVec (cumulative failure count)
-/// 3. `circuit_breaker_latency_ms{endpoint="..."}`: GaugeVec (average probe latency in milliseconds)
-/// 4. `circuit_breaker_last_opened{endpoint="..."}`: IntGaugeVec (unix timestamp when circuit last opened)
-/// 5. `circuit_breaker_success_ratio{endpoint="..."}`: GaugeVec (success rate [0.0-1.0])
-/// 6. `circuit_breaker_health_score{endpoint="..."}`: GaugeVec (health score [0.0-1.0])
+/// 2. `circuit_breaker_consecutive_failures{endpoint="..."}`: IntGaugeVec (current consecutive failure count, can increase/decrease)
+/// 3. `circuit_breaker_failures_total{endpoint="..."}`: IntCounterVec (cumulative failure count, only increases)
+/// 4. `circuit_breaker_latency_ms{endpoint="..."}`: GaugeVec (average probe latency in milliseconds)
+/// 5. `circuit_breaker_last_opened{endpoint="..."}`: IntGaugeVec (unix timestamp when circuit last opened)
+/// 6. `circuit_breaker_success_ratio{endpoint="..."}`: GaugeVec (success rate [0.0-1.0])
+/// 7. `circuit_breaker_health_score{endpoint="..."}`: GaugeVec (health score [0.0-1.0])
 ///
 /// ## Global Metrics
 ///
@@ -232,8 +233,10 @@ pub struct EndpointHealth {
 pub struct CircuitBreakerMetrics {
     /// Circuit breaker state per endpoint with labels (0=Healthy, 1=Degraded, 2=CoolingDown, 3=HalfOpen)
     pub circuit_state: IntGaugeVec,
-    /// Failure count per endpoint with labels
-    pub fail_count: IntCounterVec,
+    /// Consecutive failures per endpoint with labels (Gauge - can increase/decrease)
+    pub consecutive_failures: IntGaugeVec,
+    /// Total failures per endpoint with labels (Counter - only increases)
+    pub failures_total: IntCounterVec,
     /// Probe latency in milliseconds per endpoint with labels
     pub probe_latency: GaugeVec,
     /// Last time circuit opened (unix timestamp) per endpoint with labels
@@ -345,10 +348,10 @@ impl CircuitBreakerMetrics {
             .expect("Creating unregistered fallback IntGaugeVec should never fail")
         });
 
-        let fail_count = register_int_counter_vec_with_registry!(
+        let consecutive_failures = register_int_gauge_vec_with_registry!(
             Opts::new(
-                "circuit_breaker_failures",
-                "Cumulative failure count per endpoint"
+                "circuit_breaker_consecutive_failures",
+                "Current consecutive failure count per endpoint"
             ),
             &["endpoint"],
             &registry
@@ -356,13 +359,37 @@ impl CircuitBreakerMetrics {
         .unwrap_or_else(|e| {
             warn!(
                 error = %e,
-                "Failed to register circuit_breaker_failures metric, using unregistered fallback"
+                "Failed to register circuit_breaker_consecutive_failures metric, using unregistered fallback"
+            );
+            registration_failures.inc();
+            IntGaugeVec::new(
+                Opts::new(
+                    "circuit_breaker_consecutive_failures_fallback",
+                    "fallback gauge vec for consecutive failures"
+                ),
+                &["endpoint"]
+            )
+            .expect("Creating unregistered fallback IntGaugeVec should never fail")
+        });
+
+        let failures_total = register_int_counter_vec_with_registry!(
+            Opts::new(
+                "circuit_breaker_failures_total",
+                "Total failure count per endpoint"
+            ),
+            &["endpoint"],
+            &registry
+        )
+        .unwrap_or_else(|e| {
+            warn!(
+                error = %e,
+                "Failed to register circuit_breaker_failures_total metric, using unregistered fallback"
             );
             registration_failures.inc();
             IntCounterVec::new(
                 Opts::new(
-                    "circuit_breaker_failures_fallback",
-                    "fallback counter vec for failures"
+                    "circuit_breaker_failures_total_fallback",
+                    "fallback counter vec for total failures"
                 ),
                 &["endpoint"]
             )
@@ -469,7 +496,8 @@ impl CircuitBreakerMetrics {
 
         Self {
             circuit_state,
-            fail_count,
+            consecutive_failures,
+            failures_total,
             probe_latency,
             last_opened,
             probe_success_ratio,
@@ -659,22 +687,15 @@ impl CircuitBreaker {
             );
         }
 
-        // Update failure counter with endpoint label
-        if let Ok(counter) = metrics.fail_count.get_metric_with_label_values(&[endpoint]) {
-            // Note: Prometheus counters can only increase
-            let current = counter.get();
-            if consecutive_failures as u64 > current {
-                let delta = consecutive_failures as u64 - current;
-                counter.inc_by(delta);
-                debug!(
-                    endpoint = %endpoint,
-                    metric = "circuit_breaker_failures",
-                    previous = current,
-                    new = consecutive_failures,
-                    delta = delta,
-                    "Updated metric"
-                );
-            }
+        // Update consecutive failures gauge with endpoint label
+        if let Ok(gauge) = metrics.consecutive_failures.get_metric_with_label_values(&[endpoint]) {
+            gauge.set(consecutive_failures as i64);
+            debug!(
+                endpoint = %endpoint,
+                metric = "circuit_breaker_consecutive_failures",
+                value = consecutive_failures,
+                "Updated metric"
+            );
         }
 
         // Update latency metric with endpoint label
@@ -882,6 +903,19 @@ impl CircuitBreaker {
 
         // Update metrics
         self.update_metrics(endpoint).await;
+
+        // Increment total failures counter (separate from consecutive failures gauge)
+        {
+            let metrics = self.metrics.read().await;
+            if let Ok(counter) = metrics.failures_total.get_metric_with_label_values(&[endpoint]) {
+                counter.inc();
+                debug!(
+                    endpoint = %endpoint,
+                    metric = "circuit_breaker_failures_total",
+                    "Incremented total failures counter"
+                );
+            }
+        }
 
         // Structured logging
         if old_state != new_state {
@@ -3121,15 +3155,20 @@ mod tests {
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("endpoint-{}", endpoint_id);
             
-            // Each endpoint should have all 6 metrics accessible via labels
+            // Each endpoint should have all 7 metrics accessible via labels
             assert!(
                 metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing circuit_state metric",
                 endpoint
             );
             assert!(
-                metrics.fail_count.get_metric_with_label_values(&[&endpoint]).is_ok(),
-                "Endpoint {} missing fail_count metric",
+                metrics.consecutive_failures.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                "Endpoint {} missing consecutive_failures metric",
+                endpoint
+            );
+            assert!(
+                metrics.failures_total.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                "Endpoint {} missing failures_total metric",
                 endpoint
             );
             assert!(
@@ -3162,15 +3201,15 @@ mod tests {
         assert!(!gathered_metrics.is_empty(), "Should have gathered metrics");
         
         // With label-based metrics, we have:
-        // - 6 label-based metric families (state, failures, latency, last_opened, success_ratio, health_score)
+        // - 7 label-based metric families (state, consecutive_failures, failures_total, latency, last_opened, success_ratio, health_score)
         // - 3 global metrics (registration_failures_total, monitoring_task_count, active_tasks)
-        // Total: 9 metric families
+        // Total: 10 metric families
         let total_gathered = gathered_metrics.len();
         
-        // We should have exactly 9 metric families with label-based approach
+        // We should have exactly 10 metric families with label-based approach
         assert!(
-            total_gathered >= 9,
-            "Expected at least 9 metric families (6 label-based + 3 global), got {}",
+            total_gathered >= 10,
+            "Expected at least 10 metric families (7 label-based + 3 global), got {}",
             total_gathered
         );
         
@@ -3531,8 +3570,13 @@ mod tests {
                 endpoint
             );
             assert!(
-                metrics.fail_count.get_metric_with_label_values(&[endpoint]).is_ok(),
-                "Endpoint {} missing fail_count after load test",
+                metrics.consecutive_failures.get_metric_with_label_values(&[endpoint]).is_ok(),
+                "Endpoint {} missing consecutive_failures after load test",
+                endpoint
+            );
+            assert!(
+                metrics.failures_total.get_metric_with_label_values(&[endpoint]).is_ok(),
+                "Endpoint {} missing failures_total after load test",
                 endpoint
             );
             assert!(
@@ -4125,15 +4169,20 @@ mod tests {
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("concurrent-reg-{}", endpoint_id);
             
-            // All 6 metrics must be accessible via labels for each endpoint
+            // All 7 metrics must be accessible via labels for each endpoint
             assert!(
                 metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
                 "Endpoint {} missing circuit_state",
                 endpoint
             );
             assert!(
-                metrics.fail_count.get_metric_with_label_values(&[&endpoint]).is_ok(),
-                "Endpoint {} missing fail_count",
+                metrics.consecutive_failures.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                "Endpoint {} missing consecutive_failures",
+                endpoint
+            );
+            assert!(
+                metrics.failures_total.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                "Endpoint {} missing failures_total",
                 endpoint
             );
             assert!(
@@ -4274,6 +4323,131 @@ mod tests {
                 "All {} tasks should wake quickly, took {:?} at iteration {}",
                 num_tasks, elapsed, iteration
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_consecutive_failures_and_failures_total_semantics() {
+        // Test: Verify correct Prometheus semantics for the new metrics
+        //
+        // This validates that:
+        // 1. consecutive_failures (Gauge) can increase and decrease
+        // 2. failures_total (Counter) only increases, never decreases
+        // 3. Both metrics track failures independently
+        
+        let cb = CircuitBreaker::new(5, 60, 50);
+        let endpoint = "test-endpoint";
+        
+        // Initial state: both metrics should be zero (or not exist yet)
+        
+        // Record first failure
+        cb.record_failure(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 1, "Consecutive failures should be 1 after first failure");
+            assert_eq!(total, 1, "Total failures should be 1 after first failure");
+        }
+        
+        // Record second failure
+        cb.record_failure(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 2, "Consecutive failures should be 2 after second failure");
+            assert_eq!(total, 2, "Total failures should be 2 after second failure");
+        }
+        
+        // Record a success - this should reset consecutive failures but not total
+        cb.record_success(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 0, "Consecutive failures should reset to 0 after success");
+            assert_eq!(total, 2, "Total failures should remain 2 (Counter never decreases)");
+        }
+        
+        // Record another failure
+        cb.record_failure(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 1, "Consecutive failures should be 1 after new failure");
+            assert_eq!(total, 3, "Total failures should be 3 (incremented from 2)");
+        }
+        
+        // Record multiple failures and then success to verify gauge can fluctuate
+        for _ in 0..3 {
+            cb.record_failure(endpoint).await;
+        }
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 4, "Consecutive failures should be 4 (1 + 3 more failures)");
+            assert_eq!(total, 6, "Total failures should be 6 (accumulated from all previous failures)");
+        }
+        
+        // Another success should reset consecutive but not total
+        cb.record_success(endpoint).await;
+        
+        {
+            let metrics = cb.metrics.read().await;
+            let consecutive = metrics.consecutive_failures
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            let total = metrics.failures_total
+                .get_metric_with_label_values(&[endpoint])
+                .unwrap()
+                .get();
+            
+            assert_eq!(consecutive, 0, "Consecutive failures should reset to 0 again");
+            assert_eq!(total, 6, "Total failures should remain 6 (Counter only increases)");
         }
     }
 }
