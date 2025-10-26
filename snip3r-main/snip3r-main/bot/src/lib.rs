@@ -10,6 +10,7 @@ pub mod oracle;
 pub mod orchestrator;
 pub mod security;
 pub mod types;
+pub mod utils;
 
 // Re-export main types for convenience
 pub use actors::{MonitorActor, OracleActor, StorageActor, SupervisionStrategy, SupervisorActor};
