@@ -504,10 +504,7 @@ impl LpLockVerifier {
     /// # Returns
     /// Currently returns 0.0 as a conservative placeholder.
     /// Real implementation would return the actual token balance.
-    async fn get_token_account_balance(&self, mint: &str, owner: &str) -> Result<f64> {
-        let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint")?;
-        let owner_pubkey = Pubkey::from_str(owner).context("Invalid owner")?;
-
+    async fn get_token_account_balance(&self, _mint: &str, _owner: &str) -> Result<f64> {
         // Try to derive the associated token account address
         // This is a simplified approach - real implementation would need spl-associated-token-account
         // For now, we use a conservative approach and return 0.0
@@ -518,8 +515,7 @@ impl LpLockVerifier {
         // 3. Handle multiple accounts if needed
         
         debug!(
-            "Token account balance check for owner {} and mint {} - using conservative approach",
-            owner, mint
+            "Token account balance check - using conservative approach"
         );
         
         Ok(0.0)
@@ -641,15 +637,14 @@ impl LpLockVerifier {
     }
 
     /// Check Pump.fun specific LP lock
-    async fn check_pumpfun_lock(&self, mint: &str) -> Result<Option<LockStatus>> {
-        debug!("Checking Pump.fun lock for {}", mint);
+    async fn check_pumpfun_lock(&self, _mint: &str) -> Result<Option<LockStatus>> {
+        debug!("Checking Pump.fun lock");
         
         // Pump.fun typically uses bonding curves where LP is automatically managed
         // The bonding curve itself acts as a lock mechanism during the migration phase
         // After migration to Raydium, LP tokens are often burned
         
         // Check if this is a Pump.fun token by looking for bonding curve account
-        let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint")?;
         
         // Pump.fun bonding curve program (this is a simplified check)
         // Real implementation would check the actual bonding curve state
@@ -661,8 +656,8 @@ impl LpLockVerifier {
     }
 
     /// Check Raydium specific LP lock
-    async fn check_raydium_lock(&self, mint: &str) -> Result<Option<LockStatus>> {
-        debug!("Checking Raydium lock for {}", mint);
+    async fn check_raydium_lock(&self, _mint: &str) -> Result<Option<LockStatus>> {
+        debug!("Checking Raydium lock");
         
         // Raydium LP tokens can be:
         // 1. Locked in farm/staking programs
@@ -671,7 +666,6 @@ impl LpLockVerifier {
         // 4. Burned
         
         // Check if this token is a Raydium LP token by finding its pool
-        let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint")?;
         
         // Get pool information
         // Real implementation would:
@@ -687,16 +681,14 @@ impl LpLockVerifier {
     }
 
     /// Check Orca specific LP lock
-    async fn check_orca_lock(&self, mint: &str) -> Result<Option<LockStatus>> {
-        debug!("Checking Orca lock for {}", mint);
+    async fn check_orca_lock(&self, _mint: &str) -> Result<Option<LockStatus>> {
+        debug!("Checking Orca lock");
         
         // Orca Whirlpool positions are represented as NFTs
         // LP tokens can be:
         // 1. Locked in whirlpool positions
         // 2. Held as position NFTs (check NFT holders)
         // 3. Burned
-        
-        let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint")?;
         
         // Check for Orca Whirlpool
         // Real implementation would:
