@@ -324,8 +324,8 @@ impl Default for FeatureWeights {
             creator_sell_speed: 0.09,
             metadata_quality: 0.09,
             social_activity: 0.05,
-            dex_trending: 0.05,      // 5% weight for trending status
-            dex_momentum: 0.05,      // 5% weight for trending momentum
+            dex_trending: 0.05, // 5% weight for trending status
+            dex_momentum: 0.05, // 5% weight for trending momentum
         }
     }
 }

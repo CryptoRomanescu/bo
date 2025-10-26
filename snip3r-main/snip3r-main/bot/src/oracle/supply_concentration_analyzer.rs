@@ -33,9 +33,9 @@ use tracing::{debug, info, instrument, warn};
 
 /// Known addresses to exclude from holder analysis (burn addresses, program accounts, etc.)
 const EXCLUDED_ADDRESSES: &[&str] = &[
-    "11111111111111111111111111111111",        // System Program
-    "1nc1nerator11111111111111111111111111111111", // Incinerator
-    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // Token Program
+    "11111111111111111111111111111111",             // System Program
+    "1nc1nerator11111111111111111111111111111111",  // Incinerator
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",  // Token Program
     "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL", // Associated Token Program
 ];
 
@@ -196,13 +196,17 @@ impl SupplyConcentrationAnalyzer {
     }
 
     /// Internal analysis implementation
-    async fn analyze_internal(&self, mint: &str, start_time: Instant) -> Result<SupplyAnalysisResult> {
+    async fn analyze_internal(
+        &self,
+        mint: &str,
+        start_time: Instant,
+    ) -> Result<SupplyAnalysisResult> {
         // Parse mint address
-        let mint_pubkey = Pubkey::from_str(mint)
-            .context("Invalid mint address")?;
+        let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint address")?;
 
         // Get token supply
-        let supply_response = self.rpc_client
+        let supply_response = self
+            .rpc_client
             .get_token_supply(&mint_pubkey)
             .await
             .context("Failed to get token supply")?;
@@ -210,14 +214,16 @@ impl SupplyConcentrationAnalyzer {
         let total_supply = supply_response
             .ui_amount
             .context("Token supply UI amount not available")?;
-        let total_supply_raw = supply_response.amount.parse::<u64>()
+        let total_supply_raw = supply_response
+            .amount
+            .parse::<u64>()
             .context("Failed to parse token supply")?;
 
         debug!("Total supply for {}: {} tokens", mint, total_supply);
 
         // Fetch all token accounts for this mint
         let holders = self.fetch_token_holders(&mint_pubkey).await?;
-        
+
         if holders.is_empty() {
             warn!("No holders found for token {}", mint);
             return Ok(SupplyAnalysisResult {
@@ -278,7 +284,8 @@ impl SupplyConcentrationAnalyzer {
 
         // Get all token accounts
         let token_program = solana_sdk::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-        let accounts = self.rpc_client
+        let accounts = self
+            .rpc_client
             .get_program_accounts_with_config(&token_program, config)
             .await
             .context("Failed to fetch token accounts")?;
@@ -287,7 +294,7 @@ impl SupplyConcentrationAnalyzer {
 
         // Parse account data to extract balances
         let mut holders: Vec<(String, u64)> = Vec::new();
-        
+
         for (pubkey, account) in accounts.iter().take(self.config.max_accounts) {
             // Parse token account data
             // Token account layout: mint(32) + owner(32) + amount(8) + ...
@@ -301,7 +308,7 @@ impl SupplyConcentrationAnalyzer {
                 // Only include accounts with non-zero balance
                 if amount > 0 {
                     let owner_str = pubkey.to_string();
-                    
+
                     // Skip excluded addresses
                     if !EXCLUDED_ADDRESSES.contains(&owner_str.as_str()) {
                         holders.push((owner_str, amount));
@@ -313,12 +320,20 @@ impl SupplyConcentrationAnalyzer {
         // Sort by balance descending
         holders.sort_by(|a, b| b.1.cmp(&a.1));
 
-        debug!("Processed {} valid holders for mint {}", holders.len(), mint);
+        debug!(
+            "Processed {} valid holders for mint {}",
+            holders.len(),
+            mint
+        );
         Ok(holders)
     }
 
     /// Calculate concentration metrics from holder data
-    fn calculate_metrics(&self, holders: &[(String, u64)], total_supply: u64) -> Result<ConcentrationMetrics> {
+    fn calculate_metrics(
+        &self,
+        holders: &[(String, u64)],
+        total_supply: u64,
+    ) -> Result<ConcentrationMetrics> {
         let total_holders = holders.len();
 
         // Calculate top 10 and top 25 concentration
@@ -341,8 +356,10 @@ impl SupplyConcentrationAnalyzer {
         let gini_coefficient = self.calculate_gini_coefficient(holders, total_supply)?;
 
         // Count whales (holders with >5% of supply)
-        let whale_threshold_amount = (total_supply as f64 * self.config.whale_threshold / 100.0) as u64;
-        let whale_count = holders.iter()
+        let whale_threshold_amount =
+            (total_supply as f64 * self.config.whale_threshold / 100.0) as u64;
+        let whale_count = holders
+            .iter()
             .filter(|(_, balance)| *balance >= whale_threshold_amount)
             .count();
 
@@ -355,7 +372,10 @@ impl SupplyConcentrationAnalyzer {
         let gini_score = (gini_coefficient * 30.0) as u8; // 30% weight
         let whale_score = ((whale_count as f64 / 10.0).min(1.0) * 20.0) as u8; // 20% weight
 
-        let risk_score = concentration_score.saturating_add(gini_score).saturating_add(whale_score).min(100);
+        let risk_score = concentration_score
+            .saturating_add(gini_score)
+            .saturating_add(whale_score)
+            .min(100);
 
         Ok(ConcentrationMetrics {
             total_holders,
@@ -369,11 +389,15 @@ impl SupplyConcentrationAnalyzer {
     }
 
     /// Calculate Gini coefficient for supply distribution
-    /// 
+    ///
     /// Gini coefficient measures inequality in distribution:
     /// - 0 = perfect equality (all holders have same amount)
     /// - 1 = perfect inequality (one holder has everything)
-    fn calculate_gini_coefficient(&self, holders: &[(String, u64)], total_supply: u64) -> Result<f64> {
+    fn calculate_gini_coefficient(
+        &self,
+        holders: &[(String, u64)],
+        total_supply: u64,
+    ) -> Result<f64> {
         if holders.is_empty() || total_supply == 0 {
             return Ok(1.0); // Maximum inequality if no holders or no supply
         }
@@ -397,7 +421,12 @@ impl SupplyConcentrationAnalyzer {
     }
 
     /// Get top N holders with their percentages
-    fn get_top_holders(&self, holders: &[(String, u64)], total_supply: u64, n: usize) -> Vec<HolderInfo> {
+    fn get_top_holders(
+        &self,
+        holders: &[(String, u64)],
+        total_supply: u64,
+        n: usize,
+    ) -> Vec<HolderInfo> {
         holders
             .iter()
             .take(n)
@@ -421,7 +450,9 @@ mod tests {
     #[test]
     fn test_gini_coefficient_perfect_equality() {
         let config = SupplyConcentrationConfig::default();
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
         // All holders have equal amounts
@@ -433,16 +464,24 @@ mod tests {
         ];
         let total_supply = 400;
 
-        let gini = analyzer.calculate_gini_coefficient(&holders, total_supply).unwrap();
-        
+        let gini = analyzer
+            .calculate_gini_coefficient(&holders, total_supply)
+            .unwrap();
+
         // Should be close to 0 (perfect equality)
-        assert!(gini < 0.1, "Gini coefficient for equal distribution should be close to 0, got {}", gini);
+        assert!(
+            gini < 0.1,
+            "Gini coefficient for equal distribution should be close to 0, got {}",
+            gini
+        );
     }
 
     #[test]
     fn test_gini_coefficient_perfect_inequality() {
         let config = SupplyConcentrationConfig::default();
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
         // One holder has everything, others have almost nothing
@@ -454,16 +493,24 @@ mod tests {
         ];
         let total_supply = 10000;
 
-        let gini = analyzer.calculate_gini_coefficient(&holders, total_supply).unwrap();
-        
+        let gini = analyzer
+            .calculate_gini_coefficient(&holders, total_supply)
+            .unwrap();
+
         // Should be close to 1 (perfect inequality) - threshold lowered to 0.7 to account for small variations
-        assert!(gini > 0.7, "Gini coefficient for unequal distribution should be high, got {}", gini);
+        assert!(
+            gini > 0.7,
+            "Gini coefficient for unequal distribution should be high, got {}",
+            gini
+        );
     }
 
     #[test]
     fn test_calculate_metrics_high_concentration() {
         let config = SupplyConcentrationConfig::default();
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
         // Simulate high concentration: top 10 holders have 80% of supply
@@ -480,14 +527,19 @@ mod tests {
 
         assert_eq!(metrics.total_holders, 100);
         assert_eq!(metrics.top_10_concentration, 80.0);
-        assert!(metrics.auto_reject, "Should auto-reject with >70% top 10 concentration");
+        assert!(
+            metrics.auto_reject,
+            "Should auto-reject with >70% top 10 concentration"
+        );
         assert!(metrics.risk_score > 50, "Risk score should be high");
     }
 
     #[test]
     fn test_calculate_metrics_low_concentration() {
         let config = SupplyConcentrationConfig::default();
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
         // Simulate low concentration: evenly distributed
@@ -501,7 +553,10 @@ mod tests {
 
         assert_eq!(metrics.total_holders, 100);
         assert_eq!(metrics.top_10_concentration, 10.0);
-        assert!(!metrics.auto_reject, "Should not auto-reject with low concentration");
+        assert!(
+            !metrics.auto_reject,
+            "Should not auto-reject with low concentration"
+        );
         assert!(metrics.risk_score < 30, "Risk score should be low");
     }
 
@@ -511,14 +566,16 @@ mod tests {
             whale_threshold: 5.0, // 5% threshold
             ..Default::default()
         };
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
         // 3 whales with >5% each, rest distributed
         let holders = vec![
-            ("whale1".to_string(), 600), // 6%
-            ("whale2".to_string(), 550), // 5.5%
-            ("whale3".to_string(), 500), // 5%
+            ("whale1".to_string(), 600),  // 6%
+            ("whale2".to_string(), 550),  // 5.5%
+            ("whale3".to_string(), 500),  // 5%
             ("holder4".to_string(), 400), // 4%
             ("holder5".to_string(), 300), // 3%
         ];
@@ -526,13 +583,18 @@ mod tests {
 
         let metrics = analyzer.calculate_metrics(&holders, total_supply).unwrap();
 
-        assert_eq!(metrics.whale_count, 3, "Should detect 3 whales with >5% supply");
+        assert_eq!(
+            metrics.whale_count, 3,
+            "Should detect 3 whales with >5% supply"
+        );
     }
 
     #[test]
     fn test_top_holders_extraction() {
         let config = SupplyConcentrationConfig::default();
-        let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc_client = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
         let holders = vec![
@@ -555,7 +617,7 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let config = SupplyConcentrationConfig::default();
-        
+
         assert_eq!(config.max_accounts, 10000);
         assert_eq!(config.timeout_secs, 5);
         assert_eq!(config.auto_reject_threshold, 70.0);

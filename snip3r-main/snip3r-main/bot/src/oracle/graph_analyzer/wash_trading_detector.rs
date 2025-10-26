@@ -148,7 +148,10 @@ impl WashTradingDetector {
 
         // 3. Identify suspicious wallet clusters
         let suspicious_clusters = self.identify_suspicious_clusters(graph, &circular_paths);
-        debug!("Identified {} suspicious clusters", suspicious_clusters.len());
+        debug!(
+            "Identified {} suspicious clusters",
+            suspicious_clusters.len()
+        );
 
         // 4. Calculate overall wash probability
         let wash_probability = self.calculate_wash_probability(
@@ -208,7 +211,13 @@ impl WashTradingDetector {
                 break;
             }
 
-            let cycles = self.dfs_cycles(g, start_idx, start_idx, &mut HashSet::new(), &mut Vec::new());
+            let cycles = self.dfs_cycles(
+                g,
+                start_idx,
+                start_idx,
+                &mut HashSet::new(),
+                &mut Vec::new(),
+            );
 
             for cycle in cycles {
                 if cycle.len() >= 2 && cycle.len() <= self.config.max_cycle_length {
@@ -271,7 +280,11 @@ impl WashTradingDetector {
     }
 
     /// Analyze a cycle to extract statistics
-    fn analyze_cycle(&self, cycle: &[WalletAddress], graph: &TransactionGraph) -> Option<CircularPath> {
+    fn analyze_cycle(
+        &self,
+        cycle: &[WalletAddress],
+        graph: &TransactionGraph,
+    ) -> Option<CircularPath> {
         if cycle.len() < 2 {
             return None;
         }
@@ -492,7 +505,11 @@ impl WashTradingDetector {
     }
 
     /// Calculate cluster cohesion (how tightly connected)
-    fn calculate_cluster_cohesion(&self, wallets: &[WalletAddress], graph: &TransactionGraph) -> f64 {
+    fn calculate_cluster_cohesion(
+        &self,
+        wallets: &[WalletAddress],
+        graph: &TransactionGraph,
+    ) -> f64 {
         if wallets.len() < 2 {
             return 0.0;
         }
@@ -522,7 +539,11 @@ impl WashTradingDetector {
     }
 
     /// Calculate internal transaction ratio
-    fn calculate_internal_tx_ratio(&self, wallets: &[WalletAddress], graph: &TransactionGraph) -> f64 {
+    fn calculate_internal_tx_ratio(
+        &self,
+        wallets: &[WalletAddress],
+        graph: &TransactionGraph,
+    ) -> f64 {
         let wallet_set: HashSet<_> = wallets.iter().cloned().collect();
         let mut internal_txs = 0;
         let mut total_txs = 0;
@@ -600,10 +621,7 @@ impl WashTradingDetector {
         let cluster_factor = if suspicious_clusters.is_empty() {
             0.0
         } else {
-            let avg_cohesion = suspicious_clusters
-                .iter()
-                .map(|c| c.cohesion)
-                .sum::<f64>()
+            let avg_cohesion = suspicious_clusters.iter().map(|c| c.cohesion).sum::<f64>()
                 / suspicious_clusters.len() as f64;
             let cluster_count_factor = (suspicious_clusters.len() as f64 / 5.0).min(1.0);
             (avg_cohesion * 0.7 + cluster_count_factor * 0.3) * 0.3
@@ -717,7 +735,9 @@ mod tests {
         for i in 0..100 {
             let from = format!("wallet_{}", i);
             let to = format!("wallet_{}", (i + 1) % 100);
-            graph.add_transaction(&from, &to, create_test_edge(1000)).unwrap();
+            graph
+                .add_transaction(&from, &to, create_test_edge(1000))
+                .unwrap();
         }
 
         let result = detector.detect(&graph).unwrap();
@@ -742,7 +762,9 @@ mod tests {
             for i in 0..3 {
                 let from = format!("w_{}_{}", cycle, i);
                 let to = format!("w_{}_{}", cycle, (i + 1) % 3);
-                graph.add_transaction(&from, &to, create_test_edge(1000)).unwrap();
+                graph
+                    .add_transaction(&from, &to, create_test_edge(1000))
+                    .unwrap();
             }
         }
 

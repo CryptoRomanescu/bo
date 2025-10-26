@@ -16,7 +16,9 @@ use std::sync::Arc;
 #[tokio::test]
 async fn test_analyzer_initialization() {
     let config = SupplyConcentrationConfig::default();
-    let rpc_client = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc_client = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let analyzer = SupplyConcentrationAnalyzer::new(config, rpc_client);
 
     // Verify analyzer was created successfully
@@ -29,12 +31,27 @@ async fn test_analyzer_initialization() {
 fn test_configuration_defaults() {
     let config = SupplyConcentrationConfig::default();
 
-    assert_eq!(config.max_accounts, 10000, "Default max_accounts should be 10000");
-    assert_eq!(config.timeout_secs, 5, "Default timeout should be 5 seconds");
-    assert_eq!(config.auto_reject_threshold, 70.0, "Default auto-reject threshold should be 70%");
-    assert_eq!(config.whale_threshold, 5.0, "Default whale threshold should be 5%");
+    assert_eq!(
+        config.max_accounts, 10000,
+        "Default max_accounts should be 10000"
+    );
+    assert_eq!(
+        config.timeout_secs, 5,
+        "Default timeout should be 5 seconds"
+    );
+    assert_eq!(
+        config.auto_reject_threshold, 70.0,
+        "Default auto-reject threshold should be 70%"
+    );
+    assert_eq!(
+        config.whale_threshold, 5.0,
+        "Default whale threshold should be 5%"
+    );
     assert!(config.enable_cache, "Cache should be enabled by default");
-    assert_eq!(config.cache_ttl_secs, 300, "Default cache TTL should be 300 seconds");
+    assert_eq!(
+        config.cache_ttl_secs, 300,
+        "Default cache TTL should be 300 seconds"
+    );
 }
 
 /// Test custom configuration
@@ -63,11 +80,17 @@ fn test_auto_reject_threshold() {
     // High concentration should trigger auto-reject
     let high_concentration = 75.0;
     let threshold = 70.0;
-    assert!(high_concentration > threshold, "75% concentration should exceed 70% threshold");
+    assert!(
+        high_concentration > threshold,
+        "75% concentration should exceed 70% threshold"
+    );
 
     // Low concentration should not trigger auto-reject
     let low_concentration = 65.0;
-    assert!(low_concentration <= threshold, "65% concentration should not exceed 70% threshold");
+    assert!(
+        low_concentration <= threshold,
+        "65% concentration should not exceed 70% threshold"
+    );
 }
 
 /// Test risk score calculation logic
@@ -88,7 +111,10 @@ fn test_risk_score_calculation() {
         .saturating_add(whale_score)
         .min(100);
 
-    assert_eq!(risk_score, 74, "Risk score should be 74 for high concentration scenario");
+    assert_eq!(
+        risk_score, 74,
+        "Risk score should be 74 for high concentration scenario"
+    );
 }
 
 /// Test holder info structure
@@ -180,8 +206,14 @@ fn test_low_concentration_scenario() {
 
     let auto_reject = top_10_concentration > 70.0;
 
-    assert!(!auto_reject, "Should not auto-reject low concentration token");
-    assert!(risk_score < 40, "Risk score should be low for well-distributed token");
+    assert!(
+        !auto_reject,
+        "Should not auto-reject low concentration token"
+    );
+    assert!(
+        risk_score < 40,
+        "Risk score should be low for well-distributed token"
+    );
 }
 
 /// Test integration scenario: High concentration (risky token)
@@ -205,14 +237,17 @@ fn test_high_concentration_scenario() {
     let auto_reject = top_10_concentration > 70.0;
 
     assert!(auto_reject, "Should auto-reject high concentration token");
-    assert!(risk_score > 70, "Risk score should be high for concentrated token");
+    assert!(
+        risk_score > 70,
+        "Risk score should be high for concentrated token"
+    );
 }
 
 /// Test performance requirement: Analysis should complete in <5 seconds
 #[test]
 fn test_performance_requirement() {
     let config = SupplyConcentrationConfig::default();
-    
+
     // Verify timeout is set to 5 seconds or less
     assert!(
         config.timeout_secs <= 5,
@@ -224,9 +259,15 @@ fn test_performance_requirement() {
 #[test]
 fn test_caching_enabled() {
     let config = SupplyConcentrationConfig::default();
-    
-    assert!(config.enable_cache, "Caching should be enabled by default for performance");
-    assert_eq!(config.cache_ttl_secs, 300, "Cache TTL should be 5 minutes by default");
+
+    assert!(
+        config.enable_cache,
+        "Caching should be enabled by default for performance"
+    );
+    assert_eq!(
+        config.cache_ttl_secs, 300,
+        "Cache TTL should be 5 minutes by default"
+    );
 }
 
 /// Test whale detection thresholds
@@ -234,17 +275,26 @@ fn test_caching_enabled() {
 fn test_whale_detection_threshold() {
     let config = SupplyConcentrationConfig::default();
     let total_supply = 10_000_000_u64;
-    
+
     // Calculate whale threshold amount
     let whale_threshold_amount = (total_supply as f64 * config.whale_threshold / 100.0) as u64;
-    
-    assert_eq!(whale_threshold_amount, 500_000, "Whale threshold should be 5% of total supply");
-    
+
+    assert_eq!(
+        whale_threshold_amount, 500_000,
+        "Whale threshold should be 5% of total supply"
+    );
+
     // Test wallet with exactly 5%
     let whale_balance = 500_000;
-    assert!(whale_balance >= whale_threshold_amount, "Wallet with 5% should be considered a whale");
-    
+    assert!(
+        whale_balance >= whale_threshold_amount,
+        "Wallet with 5% should be considered a whale"
+    );
+
     // Test wallet with less than 5%
     let non_whale_balance = 499_999;
-    assert!(non_whale_balance < whale_threshold_amount, "Wallet with <5% should not be considered a whale");
+    assert!(
+        non_whale_balance < whale_threshold_amount,
+        "Wallet with <5% should not be considered a whale"
+    );
 }

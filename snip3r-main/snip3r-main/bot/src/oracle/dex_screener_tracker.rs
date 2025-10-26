@@ -284,7 +284,13 @@ pub struct DexScreenerTracker {
     /// Last poll timestamp
     last_poll: Arc<RwLock<Option<Instant>>>,
     /// Rate limiter for API requests
-    rate_limiter: Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    rate_limiter: Arc<
+        RateLimiter<
+            governor::state::direct::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
     /// Circuit breaker for API endpoint
     circuit_breaker: Option<Arc<CircuitBreaker>>,
     /// Failure counter for circuit breaker
@@ -300,8 +306,8 @@ impl DexScreenerTracker {
             .expect("Failed to create HTTP client");
 
         // Create rate limiter
-        let rate_limit = NonZeroU32::new(config.rate_limit_per_minute)
-            .expect("Rate limit must be non-zero");
+        let rate_limit =
+            NonZeroU32::new(config.rate_limit_per_minute).expect("Rate limit must be non-zero");
         let quota = Quota::per_minute(rate_limit);
         let rate_limiter = Arc::new(RateLimiter::direct(quota));
 
@@ -318,7 +324,7 @@ impl DexScreenerTracker {
 
         info!(
             "Initialized DexScreenerTracker with polling_interval={}s, cache={}s, rate_limit={}/min, circuit_breaker={}",
-            config.polling_interval_secs, 
+            config.polling_interval_secs,
             config.cache_duration_secs,
             config.rate_limit_per_minute,
             config.enable_circuit_breaker
@@ -347,23 +353,28 @@ impl DexScreenerTracker {
         let history = self.trending_history.read().await;
 
         let current_position = positions.get(token_address);
-        
+
         match current_position {
             Some(pos) => {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
                 let duration = now.saturating_sub(pos.entry_timestamp);
-                
+
                 // Calculate velocity and momentum
                 let velocity = self.calculate_velocity(token_address, &history).await;
                 let momentum_score = self.calculate_momentum_score(pos, velocity);
-                
+
                 // Calculate correlations
-                let price_correlation = self.calculate_price_correlation(token_address, &history).await;
-                let volume_correlation = self.calculate_volume_correlation(token_address, &history).await;
-                
+                let price_correlation = self
+                    .calculate_price_correlation(token_address, &history)
+                    .await;
+                let volume_correlation = self
+                    .calculate_volume_correlation(token_address, &history)
+                    .await;
+
                 // Get recent events
                 let recent_events = if let Some(hist) = history.get(token_address) {
-                    hist.events.iter()
+                    hist.events
+                        .iter()
                         .rev()
                         .take(5)
                         .map(|e| e.event.clone())
@@ -485,7 +496,11 @@ impl DexScreenerTracker {
             if attempt > 0 {
                 // Exponential backoff
                 let delay = Duration::from_millis(100 * (1 << attempt));
-                debug!(attempt, delay_ms = delay.as_millis(), "Retrying API request");
+                debug!(
+                    attempt,
+                    delay_ms = delay.as_millis(),
+                    "Retrying API request"
+                );
                 tokio::time::sleep(delay).await;
             }
 
@@ -505,7 +520,7 @@ impl DexScreenerTracker {
     async fn fetch_trending_data(&self) -> Result<DexScreenerTrendingResponse> {
         // Fetch trending pairs for Solana
         let url = format!("{}/dex/search?q=solana", self.config.base_url);
-        
+
         let mut request = self.http_client.get(&url);
         if let Some(api_key) = &self.config.api_key {
             request = request.header("X-API-KEY", api_key);
@@ -517,10 +532,7 @@ impl DexScreenerTracker {
             .context("Failed to send request to DEX Screener")?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "DEX Screener API error: {}",
-                response.status()
-            ));
+            return Err(anyhow!("DEX Screener API error: {}", response.status()));
         }
 
         let trending_response: DexScreenerTrendingResponse = response
@@ -534,18 +546,18 @@ impl DexScreenerTracker {
     /// Use fallback data from stale cache
     async fn use_fallback_data(&self) -> Result<()> {
         let cache = self.api_cache.read().await;
-        
+
         if let Some(cached) = cache.get("trending_data") {
             let age = cached.expires_at.elapsed();
             if age < Duration::from_secs(self.config.max_stale_cache_age_secs) {
                 info!(age_secs = age.as_secs(), "Using stale cache data");
-                
+
                 // Process cached data
                 if let Some(pairs) = cached.data.pairs.clone() {
                     drop(cache); // Release read lock before processing
                     self.process_trending_pairs(pairs).await?;
                 }
-                
+
                 return Ok(());
             } else {
                 warn!(
@@ -583,7 +595,8 @@ impl DexScreenerTracker {
                 continue;
             }
 
-            let price = pair.price_usd
+            let price = pair
+                .price_usd
                 .as_ref()
                 .and_then(|p| p.parse::<f64>().ok())
                 .unwrap_or(0.0);
@@ -630,7 +643,8 @@ impl DexScreenerTracker {
             };
 
             // Detect and emit events
-            self.detect_and_emit_event(&token_address, &position, previous_position, &mut history).await;
+            self.detect_and_emit_event(&token_address, &position, previous_position, &mut history)
+                .await;
 
             current_tokens.insert(token_address.clone(), position);
         }
@@ -644,10 +658,12 @@ impl DexScreenerTracker {
                 };
 
                 let duration = now.saturating_sub(old_position.entry_timestamp);
-                let price_change_pct = ((old_position.current_price - old_position.entry_price) 
-                    / old_position.entry_price) * 100.0;
-                let volume_change_pct = ((old_position.current_volume - old_position.entry_volume) 
-                    / old_position.entry_volume) * 100.0;
+                let price_change_pct = ((old_position.current_price - old_position.entry_price)
+                    / old_position.entry_price)
+                    * 100.0;
+                let volume_change_pct = ((old_position.current_volume - old_position.entry_volume)
+                    / old_position.entry_volume)
+                    * 100.0;
 
                 let event_record = TrendingEventRecord {
                     token_address: token_address.clone(),
@@ -722,7 +738,9 @@ impl DexScreenerTracker {
     ) -> Option<TrendingEvent> {
         if previous_position.is_none() {
             // New entry to trending
-            return Some(TrendingEvent::Entry { rank: position.rank });
+            return Some(TrendingEvent::Entry {
+                rank: position.rank,
+            });
         }
 
         if let Some(prev_rank) = position.previous_rank {
@@ -761,7 +779,7 @@ impl DexScreenerTracker {
         volume_change_pct: f64,
     ) -> TrendingEventRecord {
         let duration = position.timestamp.saturating_sub(position.entry_timestamp);
-        
+
         TrendingEventRecord {
             token_address: token_address.to_string(),
             event,
@@ -834,7 +852,9 @@ impl DexScreenerTracker {
             let now = hist.positions.back().unwrap().timestamp;
             let cutoff = now.saturating_sub(window_secs);
 
-            let recent: Vec<_> = hist.positions.iter()
+            let recent: Vec<_> = hist
+                .positions
+                .iter()
                 .filter(|p| p.timestamp >= cutoff)
                 .collect();
 
@@ -861,8 +881,9 @@ impl DexScreenerTracker {
     fn calculate_momentum_score(&self, position: &TrendingPosition, velocity: f64) -> f64 {
         let rank_score = (100.0 - position.rank as f64).max(0.0);
         let velocity_score = (velocity * 10.0).clamp(0.0, 50.0);
-        let duration_score = (position.timestamp.saturating_sub(position.entry_timestamp) as f64 / 60.0)
-            .min(30.0) * 1.67; // Max 50 points for 30 min
+        let duration_score =
+            (position.timestamp.saturating_sub(position.entry_timestamp) as f64 / 60.0).min(30.0)
+                * 1.67; // Max 50 points for 30 min
 
         ((rank_score + velocity_score + duration_score) / 2.0).clamp(0.0, 100.0)
     }
@@ -969,7 +990,7 @@ mod tests {
         let mut config = DexScreenerConfig::default();
         config.enable_tracking = false; // Disable to avoid API calls
         let tracker = DexScreenerTracker::new(config);
-        
+
         let metrics = tracker.get_trending_metrics("test_token").await.unwrap();
         assert!(!metrics.is_trending);
     }
@@ -977,7 +998,7 @@ mod tests {
     #[test]
     fn test_trending_history() {
         let mut history = TrendingHistory::new(100);
-        
+
         let position = TrendingPosition {
             pair_address: "pair1".to_string(),
             token_address: "token1".to_string(),
@@ -1193,7 +1214,7 @@ mod tests {
     #[test]
     fn test_config_new_fields() {
         let config = DexScreenerConfig::default();
-        
+
         // Test new configuration fields
         assert_eq!(config.max_history_size, 100);
         assert_eq!(config.rate_limit_per_minute, 20);
@@ -1208,7 +1229,7 @@ mod tests {
     #[test]
     fn test_history_size_limit() {
         let mut history = TrendingHistory::new(5); // Small limit for testing
-        
+
         // Add more positions than the limit
         for i in 0..10 {
             let position = TrendingPosition {

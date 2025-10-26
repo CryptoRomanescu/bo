@@ -38,8 +38,8 @@ pub mod clustering;
 pub mod graph_builder;
 pub mod pattern_detector;
 pub mod types;
-pub mod wash_trading_detector;
 pub mod wash_trading_api;
+pub mod wash_trading_detector;
 
 use anyhow::{Context, Result};
 use clustering::WalletClusterer;
@@ -49,12 +49,9 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use std::sync::Arc;
 use tracing::{info, instrument};
 pub use types::*;
+pub use wash_trading_api::{WashTradingBatchScorer, WashTradingScore, WashTradingScorer};
 pub use wash_trading_detector::{
-    WashTradingDetector, WashTradingResult, WashTradingConfig,
-    SuspiciousCluster, CircularPath,
-};
-pub use wash_trading_api::{
-    WashTradingScorer, WashTradingScore, WashTradingBatchScorer,
+    CircularPath, SuspiciousCluster, WashTradingConfig, WashTradingDetector, WashTradingResult,
 };
 
 /// Main on-chain graph analyzer

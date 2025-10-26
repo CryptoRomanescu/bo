@@ -42,7 +42,7 @@ async fn test_classification_should_avoid() {
 #[tokio::test]
 async fn test_config_defaults() {
     let config = BotBundleConfig::default();
-    
+
     assert_eq!(config.min_transactions, 20);
     assert_eq!(config.healthy_organic_threshold, 0.30);
     assert_eq!(config.avoid_bot_threshold, 0.85);
@@ -136,7 +136,10 @@ async fn test_organic_analysis_scenario() {
 
     let score = BotBundleScore::from_analysis(&analysis);
 
-    assert!(score.bot_penalty < 30, "Bot penalty should be low for organic token");
+    assert!(
+        score.bot_penalty < 30,
+        "Bot penalty should be low for organic token"
+    );
     assert!(!score.should_avoid, "Should not avoid organic token");
     assert!(score.organic_bonus > 50, "Organic bonus should be high");
 }
@@ -181,7 +184,11 @@ async fn test_bundle_coordinated_scenario() {
 
     assert!(score.bundle_penalty > 50, "Bundle penalty should be high");
     assert!(score.should_avoid, "Should avoid bundle-coordinated token");
-    assert_eq!(analysis.classification.risk_score(), 1.0, "Risk score should be maximum");
+    assert_eq!(
+        analysis.classification.risk_score(),
+        1.0,
+        "Risk score should be maximum"
+    );
 }
 
 #[tokio::test]
@@ -192,5 +199,8 @@ async fn test_detector_config_access() {
 
     let detector_config = detector.config();
     assert_eq!(detector_config.min_transactions, config.min_transactions);
-    assert_eq!(detector_config.healthy_organic_threshold, config.healthy_organic_threshold);
+    assert_eq!(
+        detector_config.healthy_organic_threshold,
+        config.healthy_organic_threshold
+    );
 }

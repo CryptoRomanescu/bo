@@ -287,12 +287,12 @@ impl Actor for SupervisorActor {
         ctx.run_interval(Duration::from_secs(30), |act, ctx| {
             let actors = Arc::clone(&act.actors);
             let restart_stats = Arc::clone(&act.restart_stats);
-            
+
             ctx.spawn(
                 async move {
                     let actors = actors.read().await;
                     let stats = restart_stats.read().await;
-                    
+
                     info!(
                         "SupervisorActor health check - Restart counts: Oracle={}, Storage={}, Monitor={}",
                         stats.oracle_restarts, stats.storage_restarts, stats.monitor_restarts

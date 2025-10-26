@@ -33,19 +33,19 @@ async fn main() -> anyhow::Result<()> {
         // In production, these would come from environment variables
         nansen_api_key: std::env::var("NANSEN_API_KEY").ok(),
         birdeye_api_key: std::env::var("BIRDEYE_API_KEY").ok(),
-        
+
         // Add some example smart wallets for demo
         custom_smart_wallets: vec![
             "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM".to_string(),
             "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj".to_string(),
             "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU".to_string(),
         ],
-        
+
         detection_window_secs: 60,
         min_smart_wallets: 2,
         cache_duration_secs: 300,
         api_timeout_secs: 5,
-        enable_nansen: false, // Set to true if you have API key
+        enable_nansen: false,  // Set to true if you have API key
         enable_birdeye: false, // Set to true if you have API key
     };
 
@@ -87,12 +87,18 @@ async fn main() -> anyhow::Result<()> {
     for wallet in additional_wallets {
         println!("   Adding: {}", wallet.address);
         println!("   - Success Rate: {}%", wallet.success_rate.unwrap_or(0.0));
-        println!("   - Total Profit: {} SOL", wallet.total_profit_sol.unwrap_or(0.0));
+        println!(
+            "   - Total Profit: {} SOL",
+            wallet.total_profit_sol.unwrap_or(0.0)
+        );
         smart_money_tracker.add_smart_wallet(wallet).await;
     }
 
     let tracked_wallets = smart_money_tracker.get_smart_wallets().await;
-    println!("\n✅ Now tracking {} smart wallets\n", tracked_wallets.len());
+    println!(
+        "\n✅ Now tracking {} smart wallets\n",
+        tracked_wallets.len()
+    );
 
     // Part 3: Setup Early Pump Detector with Smart Money Integration
     println!("📋 Step 3: Configuring Early Pump Detector...\n");
@@ -110,11 +116,8 @@ async fn main() -> anyhow::Result<()> {
         rpc_endpoints: vec!["https://api.mainnet-beta.solana.com".to_string()],
     };
 
-    let detector = EarlyPumpDetector::with_smart_money(
-        pump_config,
-        rpc_client,
-        smart_money_tracker.clone(),
-    );
+    let detector =
+        EarlyPumpDetector::with_smart_money(pump_config, rpc_client, smart_money_tracker.clone());
 
     println!("✅ Early Pump Detector initialized with smart money integration");
     println!("   - Detection timeout: 60s");
@@ -161,7 +164,10 @@ async fn main() -> anyhow::Result<()> {
             for (i, tx) in alert.transactions.iter().enumerate() {
                 println!("   {}. Wallet: {}", i + 1, &tx.wallet[..8]);
                 println!("      Amount: {:.4} SOL", tx.amount_sol);
-                println!("      Time:   {}s after deploy", tx.timestamp - deploy_timestamp);
+                println!(
+                    "      Time:   {}s after deploy",
+                    tx.timestamp - deploy_timestamp
+                );
             }
             println!();
         }
@@ -183,26 +189,62 @@ async fn main() -> anyhow::Result<()> {
     println!("Overall Score:         {}/100", analysis.score);
     println!();
     println!("INDIVIDUAL CHECKS:");
-    println!("   Supply Concentration: {}/100", analysis.check_results.supply_concentration);
-    println!("   LP Lock:              {}/100", analysis.check_results.lp_lock);
-    println!("   Wash Trading Risk:    {}/100", analysis.check_results.wash_trading_risk);
-    println!("   Smart Money:          {}/100 ({} wallets)",
-        analysis.check_results.smart_money,
-        analysis.check_results.smart_money_wallet_count
+    println!(
+        "   Supply Concentration: {}/100",
+        analysis.check_results.supply_concentration
     );
-    println!("   Holder Growth:        {}/100", analysis.check_results.holder_growth);
+    println!(
+        "   LP Lock:              {}/100",
+        analysis.check_results.lp_lock
+    );
+    println!(
+        "   Wash Trading Risk:    {}/100",
+        analysis.check_results.wash_trading_risk
+    );
+    println!(
+        "   Smart Money:          {}/100 ({} wallets)",
+        analysis.check_results.smart_money, analysis.check_results.smart_money_wallet_count
+    );
+    println!(
+        "   Holder Growth:        {}/100",
+        analysis.check_results.holder_growth
+    );
     println!();
     println!("TIMING METRICS:");
-    println!("   Deploy → Detection:   {}ms", analysis.timings.deploy_to_detection_ms);
-    println!("   Detection → Decision: {}ms", analysis.timings.detection_to_decision_ms);
-    println!("   Total Time:           {}ms", analysis.timings.total_decision_time_ms);
+    println!(
+        "   Deploy → Detection:   {}ms",
+        analysis.timings.deploy_to_detection_ms
+    );
+    println!(
+        "   Detection → Decision: {}ms",
+        analysis.timings.detection_to_decision_ms
+    );
+    println!(
+        "   Total Time:           {}ms",
+        analysis.timings.total_decision_time_ms
+    );
     println!();
     println!("CHECK TIMINGS:");
-    println!("   Supply Check:         {}ms", analysis.timings.check_timings.supply_concentration_ms);
-    println!("   LP Lock Check:        {}ms", analysis.timings.check_timings.lp_lock_ms);
-    println!("   Wash Trading Check:   {}ms", analysis.timings.check_timings.wash_trading_ms);
-    println!("   Smart Money Check:    {}ms", analysis.timings.check_timings.smart_money_ms);
-    println!("   Holder Growth Check:  {}ms", analysis.timings.check_timings.holder_growth_ms);
+    println!(
+        "   Supply Check:         {}ms",
+        analysis.timings.check_timings.supply_concentration_ms
+    );
+    println!(
+        "   LP Lock Check:        {}ms",
+        analysis.timings.check_timings.lp_lock_ms
+    );
+    println!(
+        "   Wash Trading Check:   {}ms",
+        analysis.timings.check_timings.wash_trading_ms
+    );
+    println!(
+        "   Smart Money Check:    {}ms",
+        analysis.timings.check_timings.smart_money_ms
+    );
+    println!(
+        "   Holder Growth Check:  {}ms",
+        analysis.timings.check_timings.holder_growth_ms
+    );
     println!("═══════════════════════════════════════════════════════════════\n");
 
     // Part 6: Summary
@@ -212,11 +254,13 @@ async fn main() -> anyhow::Result<()> {
     println!("✅ Real-time alert system operational");
     println!("✅ Decision made in <100s requirement met");
     println!();
-    
+
     if analysis.check_results.smart_money_wallet_count >= 2 {
         println!("🚨 RECOMMENDATION: STRONG BUY SIGNAL");
-        println!("   {} smart wallets detected within detection window",
-            analysis.check_results.smart_money_wallet_count);
+        println!(
+            "   {} smart wallets detected within detection window",
+            analysis.check_results.smart_money_wallet_count
+        );
         println!("   This indicates high confidence in token potential");
     } else {
         println!("ℹ️  Monitoring recommended");

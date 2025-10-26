@@ -14,7 +14,10 @@ async fn test_token_detector_basic_detection() {
     let config = TokenDetectorConfig::default();
     let detector = TokenDetector::new(config, tx);
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let event = DetectionEvent {
         mint: "test_mint_123".to_string(),
@@ -55,7 +58,10 @@ async fn test_token_detector_deduplication() {
     let config = TokenDetectorConfig::default();
     let detector = TokenDetector::new(config, tx);
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let event1 = DetectionEvent {
         mint: "duplicate_mint".to_string(),
@@ -118,7 +124,10 @@ async fn test_token_detector_multiple_sources() {
 
     let detector = TokenDetector::new(config, tx);
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // Create events from different sources
     let sources = vec![
@@ -186,7 +195,10 @@ async fn test_detection_metrics_latency_calculation() {
 
 #[tokio::test]
 async fn test_detection_event_conversion() {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let mut metadata = HashMap::new();
     metadata.insert("name".to_string(), "TestToken".to_string());
@@ -213,7 +225,10 @@ async fn test_detection_event_conversion() {
     assert_eq!(candidate.program, "pump.fun");
     assert_eq!(candidate.slot, 12345);
     assert_eq!(candidate.timestamp, now - 1);
-    assert_eq!(candidate.instruction_summary, Some("create token".to_string()));
+    assert_eq!(
+        candidate.instruction_summary,
+        Some("create token".to_string())
+    );
     assert_eq!(candidate.is_jito_bundle, Some(true));
 }
 
@@ -228,7 +243,10 @@ async fn test_detection_sensitivity_filtering() {
 
     let detector = TokenDetector::new(config, tx);
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // Event from enabled source
     let event1 = DetectionEvent {
@@ -320,7 +338,10 @@ async fn test_clock_skew_filtering() {
 
     let detector = TokenDetector::new(config, tx);
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     // Event with acceptable clock skew
     let event1 = DetectionEvent {
@@ -372,7 +393,10 @@ async fn test_detector_reset_metrics() {
     let config = TokenDetectorConfig::default();
     let detector = TokenDetector::new(config, tx);
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let event = DetectionEvent {
         mint: "test_mint".to_string(),

@@ -44,7 +44,7 @@ impl BotBundleDetector {
         deploy_timestamp: u64,
     ) -> Result<BotBundleAnalysis> {
         let start_time = Instant::now();
-        
+
         if transactions.len() < self.config.min_transactions {
             warn!(
                 "Insufficient transactions for analysis: {} < {}",
@@ -83,8 +83,12 @@ impl BotBundleDetector {
             self.calculate_manipulation_score(&bot_metrics, &bundle_metrics, &suspicious_clusters);
 
         // Classify token
-        let classification =
-            self.classify_token(bot_percentage, organic_ratio, &bundle_metrics, &suspicious_clusters);
+        let classification = self.classify_token(
+            bot_percentage,
+            organic_ratio,
+            &bundle_metrics,
+            &suspicious_clusters,
+        );
 
         let analysis_duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -162,8 +166,12 @@ impl BotBundleDetector {
             self.calculate_manipulation_score(&bot_metrics, &bundle_metrics, &suspicious_clusters);
 
         // Classify token
-        let classification =
-            self.classify_token(bot_percentage, organic_ratio, &bundle_metrics, &suspicious_clusters);
+        let classification = self.classify_token(
+            bot_percentage,
+            organic_ratio,
+            &bundle_metrics,
+            &suspicious_clusters,
+        );
 
         let analysis_duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -195,7 +203,7 @@ impl BotBundleDetector {
     }
 
     /// Fetch token transactions from Solana
-    /// 
+    ///
     /// TODO: This is a placeholder for full RPC integration
     /// In production, this would:
     /// 1. Use rpc_client.get_signatures_for_address()
@@ -223,13 +231,16 @@ impl BotBundleDetector {
 
         // For integration with actual RPC, see graph_analyzer for reference implementation
         // This stub allows the detector to be instantiated and tested with manual data
-        
+
         Ok(transactions)
     }
 
     /// Detect transaction bundles
     #[instrument(skip(self, transactions))]
-    pub(crate) fn detect_bundles(&self, transactions: &[TransactionTiming]) -> Result<BundleMetrics> {
+    pub(crate) fn detect_bundles(
+        &self,
+        transactions: &[TransactionTiming],
+    ) -> Result<BundleMetrics> {
         if transactions.is_empty() {
             return Ok(BundleMetrics {
                 bundle_count: 0,
@@ -246,7 +257,11 @@ impl BotBundleDetector {
         let bundle_count = bundles.len();
         let bundled_transaction_count: usize = bundles.iter().map(|b| b.transactions.len()).sum();
         let bundle_percentage = bundled_transaction_count as f64 / transactions.len() as f64;
-        let max_bundle_size = bundles.iter().map(|b| b.transactions.len()).max().unwrap_or(0);
+        let max_bundle_size = bundles
+            .iter()
+            .map(|b| b.transactions.len())
+            .max()
+            .unwrap_or(0);
         let avg_bundle_size = if bundle_count > 0 {
             bundled_transaction_count as f64 / bundle_count as f64
         } else {
@@ -363,9 +378,7 @@ impl BotBundleDetector {
         suspicious_clusters: &[SuspiciousCluster],
     ) -> TokenClassification {
         // Check for coordinated bundles first
-        if bundle_metrics.coordinated_bundle_count > 3
-            && bundle_metrics.bundle_percentage > 0.5
-        {
+        if bundle_metrics.coordinated_bundle_count > 3 && bundle_metrics.bundle_percentage > 0.5 {
             return TokenClassification::BundleCoordinated;
         }
 
@@ -441,9 +454,21 @@ mod tests {
         let base_time = Utc::now();
         let transactions = vec![
             create_test_transaction("addr1", base_time, 50),
-            create_test_transaction("addr2", base_time + chrono::Duration::milliseconds(100), 150),
-            create_test_transaction("addr3", base_time + chrono::Duration::milliseconds(200), 250),
-            create_test_transaction("addr4", base_time + chrono::Duration::milliseconds(300), 350),
+            create_test_transaction(
+                "addr2",
+                base_time + chrono::Duration::milliseconds(100),
+                150,
+            ),
+            create_test_transaction(
+                "addr3",
+                base_time + chrono::Duration::milliseconds(200),
+                250,
+            ),
+            create_test_transaction(
+                "addr4",
+                base_time + chrono::Duration::milliseconds(300),
+                350,
+            ),
         ];
 
         let bundles = detector.find_bundles(&transactions).unwrap();
@@ -467,18 +492,15 @@ mod tests {
         };
 
         // Test organic
-        let classification =
-            detector.classify_token(0.2, 0.8, &bundle_metrics, &[]);
+        let classification = detector.classify_token(0.2, 0.8, &bundle_metrics, &[]);
         assert_eq!(classification, TokenClassification::Organic);
 
         // Test bot-dominated
-        let classification =
-            detector.classify_token(0.75, 0.25, &bundle_metrics, &[]);
+        let classification = detector.classify_token(0.75, 0.25, &bundle_metrics, &[]);
         assert_eq!(classification, TokenClassification::BotDominated);
 
         // Test highly manipulated
-        let classification =
-            detector.classify_token(0.90, 0.10, &bundle_metrics, &[]);
+        let classification = detector.classify_token(0.90, 0.10, &bundle_metrics, &[]);
         assert_eq!(classification, TokenClassification::HighlyManipulated);
     }
 

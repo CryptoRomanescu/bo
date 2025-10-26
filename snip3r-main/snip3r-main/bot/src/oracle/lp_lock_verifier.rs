@@ -189,8 +189,7 @@ use anyhow::{Context, Result};
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_client::rpc_config::RpcProgramAccountsConfig;
-use solana_client::rpc_filter::{Memcmp, RpcFilterType};
+use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use spl_associated_token_account::get_associated_token_address;
 use std::str::FromStr;
@@ -360,15 +359,15 @@ impl LpLockVerifier {
             "Initialized LpLockVerifier with timeout={}s, min_lock={}%, min_duration={}d",
             config.timeout_secs, config.min_lock_percentage, config.min_lock_duration_days
         );
-        
+
         // Create cache with 5-minute TTL
         let cache = Cache::builder()
             .time_to_live(Duration::from_secs(300))
             .max_capacity(1000)
             .build();
-        
-        Self { 
-            config, 
+
+        Self {
+            config,
             rpc_client,
             cache,
         }
@@ -494,7 +493,8 @@ impl LpLockVerifier {
     /// This method:
     /// 1. Gets the total supply of the LP token (raw amount + decimals)
     /// 2. Checks all known burn addresses for token balances via ATA
-    /// 3. Calculates the actual percentage burned using integer math
+    /// 3. Fetches largest token accounts and checks if their OWNER is a burn address
+    /// 4. Calculates the actual percentage burned using integer math
     ///
     /// # Returns
     /// - `Ok(Some(LockStatus::Burned))` if tokens are found in burn addresses
@@ -530,44 +530,116 @@ impl LpLockVerifier {
             mint, total_supply_raw, supply_result.decimals
         );
 
-        // Check each known burn address
         let mut total_burned_raw: u128 = 0;
         let mut burn_addresses_with_balance = Vec::new();
 
+        // Step 1: Check each known burn address via ATA
         for burn_addr in BURN_ADDRESSES {
             // Get the associated token account balance for this burn address
-            match self.get_token_account_balance(mint, burn_addr).await {
-                Ok(balance_ui) if balance_ui > 0.0 => {
-                    // Convert ui_amount back to raw amount for integer math
-                    let balance_raw = (balance_ui * 10_f64.powi(supply_result.decimals as i32)) as u128;
+            match self
+                .get_token_account_balance_raw(mint, burn_addr, supply_result.decimals)
+                .await
+            {
+                Ok(balance_raw) if balance_raw > 0 => {
                     debug!(
-                        "Found {} tokens (raw: {}) in burn address {}",
-                        balance_ui, balance_raw, burn_addr
+                        "Found {} raw tokens in ATA for burn address {}",
+                        balance_raw, burn_addr
                     );
                     total_burned_raw += balance_raw;
-                    burn_addresses_with_balance.push((burn_addr.to_string(), balance_ui));
+                    burn_addresses_with_balance.push(burn_addr.to_string());
                 }
                 Ok(_) => {
-                    debug!("Burn address {} has no balance for token {}", burn_addr, mint);
+                    debug!(
+                        "Burn address {} has no ATA balance for token {}",
+                        burn_addr, mint
+                    );
                 }
                 Err(e) => {
-                    debug!("Failed to check burn address {}: {}", burn_addr, e);
+                    debug!("Failed to check burn address ATA {}: {}", burn_addr, e);
                 }
+            }
+        }
+
+        // Step 2: Get largest token accounts and check if their OWNER is a burn address
+        match self
+            .rpc_client
+            .get_token_largest_accounts(&mint_pubkey)
+            .await
+        {
+            Ok(largest_accounts) => {
+                debug!(
+                    "Found {} largest accounts for burn detection",
+                    largest_accounts.len()
+                );
+
+                // Collect addresses to fetch (parse strings to Pubkey)
+                let addresses_to_fetch: Vec<Pubkey> = largest_accounts
+                    .iter()
+                    .filter_map(|acc| Pubkey::from_str(&acc.address.to_string()).ok())
+                    .collect();
+
+                // Fetch account data for all largest accounts
+                if !addresses_to_fetch.is_empty() {
+                    match self
+                        .rpc_client
+                        .get_multiple_accounts(&addresses_to_fetch)
+                        .await
+                    {
+                        Ok(accounts) => {
+                            for (idx, maybe_account) in accounts.iter().enumerate() {
+                                if let Some(account) = maybe_account {
+                                    // Parse token account to get owner using Pack trait
+                                    if let Ok(token_account) =
+                                        spl_token::state::Account::unpack_from_slice(&account.data)
+                                    {
+                                        let owner_str = token_account.owner.to_string();
+                                        let amount_raw = largest_accounts[idx]
+                                            .amount
+                                            .amount
+                                            .parse::<u128>()
+                                            .unwrap_or(0);
+
+                                        // Check if owner is a burn address
+                                        if BURN_ADDRESSES.contains(&owner_str.as_str()) {
+                                            debug!(
+                                                "Found {} raw tokens in account {} owned by burn address {}",
+                                                amount_raw, addresses_to_fetch[idx], owner_str
+                                            );
+                                            total_burned_raw += amount_raw;
+                                            if !burn_addresses_with_balance.contains(&owner_str) {
+                                                burn_addresses_with_balance.push(owner_str);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            debug!(
+                                "Failed to fetch multiple accounts for burn detection: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("Failed to get largest accounts for burn detection: {}", e);
             }
         }
 
         // Calculate burned percentage using integer math for precision
         if total_burned_raw > 0 {
             let percentage_burned = ((total_burned_raw * 100) / total_supply_raw).min(100) as u8;
-            debug!(
-                "Total burned: {} / {} = {}%",
+            info!(
+                "Burn detection (raw): total_burned={}, total_supply={}, burned={}%",
                 total_burned_raw, total_supply_raw, percentage_burned
             );
 
             // Use the primary burn address for reporting
             let primary_burn = burn_addresses_with_balance
                 .first()
-                .map(|(addr, _)| addr.clone())
+                .cloned()
                 .unwrap_or_else(|| BURN_ADDRESSES[0].to_string());
 
             return Ok(Some(LockStatus::Burned {
@@ -577,6 +649,59 @@ impl LpLockVerifier {
         }
 
         Ok(None)
+    }
+
+    /// Get token account balance for a specific owner and mint (raw amount)
+    ///
+    /// This method uses real on-chain data:
+    /// 1. Derives the Associated Token Account (ATA) address
+    /// 2. Queries the account balance via RPC
+    /// 3. Returns precise u128 raw amount
+    ///
+    /// # Arguments
+    /// * `mint` - Token mint address
+    /// * `owner` - Owner wallet address
+    /// * `decimals` - Token decimals for logging
+    ///
+    /// # Returns
+    /// Balance as u128 (raw amount) or 0 if account doesn't exist
+    async fn get_token_account_balance_raw(
+        &self,
+        mint: &str,
+        owner: &str,
+        decimals: u8,
+    ) -> Result<u128> {
+        let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint address")?;
+        let owner_pubkey = Pubkey::from_str(owner).context("Invalid owner address")?;
+
+        // Derive the Associated Token Account address
+        let ata_address = get_associated_token_address(&owner_pubkey, &mint_pubkey);
+
+        debug!(
+            "Checking ATA balance: mint={}, owner={}, ata={}",
+            mint, owner, ata_address
+        );
+
+        // Try to get the token account balance
+        match self
+            .rpc_client
+            .get_token_account_balance(&ata_address)
+            .await
+        {
+            Ok(balance) => {
+                let amount_raw = balance.amount.parse::<u128>().unwrap_or(0);
+                debug!(
+                    "Found token balance: {} raw (decimals: {})",
+                    amount_raw, decimals
+                );
+                Ok(amount_raw)
+            }
+            Err(e) => {
+                // Account might not exist, which is fine
+                debug!("No token account found for owner {}: {}", owner, e);
+                Ok(0)
+            }
+        }
     }
 
     /// Get token account balance for a specific owner and mint
@@ -592,20 +717,25 @@ impl LpLockVerifier {
     ///
     /// # Returns
     /// Balance as f64 (ui_amount) or 0.0 if account doesn't exist
+    #[allow(dead_code)]
     async fn get_token_account_balance(&self, mint: &str, owner: &str) -> Result<f64> {
         let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint address")?;
         let owner_pubkey = Pubkey::from_str(owner).context("Invalid owner address")?;
-        
+
         // Derive the Associated Token Account address
         let ata_address = get_associated_token_address(&owner_pubkey, &mint_pubkey);
-        
+
         debug!(
             "Checking ATA balance: mint={}, owner={}, ata={}",
             mint, owner, ata_address
         );
-        
+
         // Try to get the token account balance
-        match self.rpc_client.get_token_account_balance(&ata_address).await {
+        match self
+            .rpc_client
+            .get_token_account_balance(&ata_address)
+            .await
+        {
             Ok(balance) => {
                 let amount = balance.ui_amount.unwrap_or(0.0);
                 debug!(
@@ -659,7 +789,10 @@ impl LpLockVerifier {
 
         // Check each known lock program
         for lock_program in LOCK_PROGRAMS {
-            match self.check_specific_lock_program(mint, lock_program, total_supply).await {
+            match self
+                .check_specific_lock_program(mint, lock_program, total_supply)
+                .await
+            {
                 Ok(Some(status)) => return Ok(Some(status)),
                 Ok(None) => continue,
                 Err(e) => {
@@ -696,12 +829,15 @@ impl LpLockVerifier {
         match self.rpc_client.get_account(&lock_pubkey).await {
             Ok(account) => {
                 debug!("Lock program {} exists, checking for locks", lock_program);
-                
+
                 // Parse lock data based on program type
-                if let Some(lock_info) = self.parse_lock_account_data(&account.data, lock_program, total_supply).await {
+                if let Some(lock_info) = self
+                    .parse_lock_account_data(&account.data, lock_program, total_supply)
+                    .await
+                {
                     return Ok(Some(lock_info));
                 }
-                
+
                 Ok(None)
             }
             Err(e) => {
@@ -721,19 +857,19 @@ impl LpLockVerifier {
         // This is a simplified implementation
         // Real implementation would need borsh/anchor deserialization
         // for each specific lock program's account structure
-        
+
         debug!("Parsing lock data for program: {}", lock_program);
-        
+
         // For production, we would:
         // 1. Deserialize the account data based on the lock program's schema
         // 2. Extract: locked_amount, unlock_timestamp, lock_owner
         // 3. Verify the lock is still active (not expired)
         // 4. Calculate percentage locked
-        
+
         // Since we don't have the exact schemas without extensive testing,
         // we return None to indicate no lock was found through parsing
         // The platform-specific checks will handle most cases
-        
+
         None
     }
 
@@ -757,7 +893,7 @@ impl LpLockVerifier {
     /// - None if unable to verify
     async fn check_pumpfun_lock(&self, mint: &str) -> Result<Option<LockStatus>> {
         debug!("Checking Pump.fun bonding curve for {}", mint);
-        
+
         let mint_pubkey = match Pubkey::from_str(mint) {
             Ok(pk) => pk,
             Err(e) => {
@@ -765,7 +901,7 @@ impl LpLockVerifier {
                 return Ok(None);
             }
         };
-        
+
         // Derive the bonding curve PDA
         // Pump.fun uses a specific seed structure for bonding curves
         // PDA = [b"bonding-curve", mint.key().as_ref()]
@@ -776,28 +912,31 @@ impl LpLockVerifier {
                 return Ok(None);
             }
         };
-        
+
         let seeds = &[b"bonding-curve", mint_pubkey.as_ref()];
         let (bonding_curve_pda, _bump) = Pubkey::find_program_address(seeds, &program_id);
-        
+
         debug!("Checking bonding curve PDA: {}", bonding_curve_pda);
-        
+
         // Try to fetch the bonding curve account
         match self.rpc_client.get_account(&bonding_curve_pda).await {
             Ok(account) => {
                 // Account exists - check if it's still active
-                debug!("Found bonding curve account, size: {} bytes", account.data.len());
-                
+                debug!(
+                    "Found bonding curve account, size: {} bytes",
+                    account.data.len()
+                );
+
                 // Basic heuristic: if account has data, bonding curve might be active
                 // More sophisticated parsing would check the actual state
-                if account.data.len() > 0 {
+                if !account.data.is_empty() {
                     // Conservative: assume 100% locked during bonding curve phase
                     // The curve itself acts as the lock mechanism
                     debug!("Bonding curve appears active - LP locked in curve");
                     Ok(Some(LockStatus::Locked {
                         contract: bonding_curve_pda.to_string(),
                         duration_secs: 365 * 24 * 60 * 60, // Until migration (unknown, use 1 year)
-                        expiry_timestamp: 0, // Unknown expiry
+                        expiry_timestamp: 0,               // Unknown expiry
                         percentage_locked: 100,
                     }))
                 } else {
@@ -806,7 +945,10 @@ impl LpLockVerifier {
                 }
             }
             Err(e) => {
-                debug!("No bonding curve account found: {} - likely migrated or not Pump.fun", e);
+                debug!(
+                    "No bonding curve account found: {} - likely migrated or not Pump.fun",
+                    e
+                );
                 // No bonding curve = either migrated or not a Pump.fun token
                 // Let burn detection and other checks handle it
                 Ok(None)
@@ -816,14 +958,10 @@ impl LpLockVerifier {
 
     /// Check Raydium specific LP lock
     ///
-    /// # Current Implementation Status
-    /// Check Raydium specific LP lock
-    ///
     /// This implementation:
-    /// 1. Searches for Raydium AMM pool accounts with this LP mint
-    /// 2. Checks if LP tokens are locked in farm/staking programs
-    /// 3. Analyzes pool authority ownership
-    /// 4. Uses GetTokenLargestAccounts to identify farm-locked LP
+    /// 1. Checks if LP tokens are locked in farm/staking programs
+    /// 2. Uses raw amounts (u128) for percentage calculations
+    /// 3. Only reports locked if ≥5% is in farm program
     ///
     /// # Raydium LP Lock Patterns
     /// - LP locked in farm/staking programs (secured)
@@ -831,11 +969,11 @@ impl LpLockVerifier {
     /// - LP held by pool authority or distributed (unlocked)
     ///
     /// # Returns
-    /// - Locked status if LP found in farm programs
+    /// - Locked status if LP found in farm programs (≥5%)
     /// - None otherwise (defers to general detection)
     async fn check_raydium_lock(&self, mint: &str) -> Result<Option<LockStatus>> {
         debug!("Checking Raydium farm/stake locks for {}", mint);
-        
+
         let mint_pubkey = match Pubkey::from_str(mint) {
             Ok(pk) => pk,
             Err(e) => {
@@ -843,9 +981,23 @@ impl LpLockVerifier {
                 return Ok(None);
             }
         };
-        
+
+        // Get total supply (raw amount) for percentage calculation
+        let supply_result = match self.rpc_client.get_token_supply(&mint_pubkey).await {
+            Ok(supply) => supply,
+            Err(e) => {
+                debug!("Failed to get total supply for Raydium check: {}", e);
+                return Ok(None);
+            }
+        };
+
+        let total_raw = supply_result.amount.parse::<u128>().unwrap_or(0);
+        if total_raw == 0 {
+            debug!("Zero supply, cannot check Raydium locks");
+            return Ok(None);
+        }
+
         // Check if LP tokens are held by the Raydium farm program
-        // Farm program holds tokens that are staked/locked
         let farm_program = match Pubkey::from_str(RAYDIUM_FARM_PROGRAM) {
             Ok(pk) => pk,
             Err(_) => {
@@ -853,37 +1005,37 @@ impl LpLockVerifier {
                 return Ok(None);
             }
         };
-        
+
         // Get the ATA for the farm program
         let farm_ata = get_associated_token_address(&farm_program, &mint_pubkey);
-        
+
         debug!("Checking Raydium farm ATA: {}", farm_ata);
-        
+
         match self.rpc_client.get_token_account_balance(&farm_ata).await {
             Ok(balance) => {
-                let locked_amount = balance.ui_amount.unwrap_or(0.0);
-                if locked_amount > 0.0 {
-                    // Get total supply to calculate percentage
-                    let total_supply = match self.rpc_client.get_token_supply(&mint_pubkey).await {
-                        Ok(supply) => supply.ui_amount.unwrap_or(1.0),
-                        Err(_) => 1.0, // Conservative fallback
-                    };
-                    
-                    let percentage_locked = ((locked_amount / total_supply) * 100.0).min(100.0) as u8;
-                    
-                    debug!(
-                        "Found {} LP tokens locked in Raydium farm ({}%)",
-                        locked_amount, percentage_locked
+                let locked_raw = balance.amount.parse::<u128>().unwrap_or(0);
+                if locked_raw > 0 {
+                    // Calculate percentage using integer math (u128)
+                    let percentage_locked = ((locked_raw * 100) / total_raw).min(100) as u8;
+
+                    info!(
+                        "Raydium farm: locked_raw={}, total_raw={}, pct={}%",
+                        locked_raw, total_raw, percentage_locked
                     );
-                    
+
                     if percentage_locked >= 5 {
                         // Only report if significant amount is locked
                         return Ok(Some(LockStatus::Locked {
                             contract: RAYDIUM_FARM_PROGRAM.to_string(),
                             duration_secs: 365 * 24 * 60 * 60, // Farms are typically long-term
-                            expiry_timestamp: 0, // Unknown expiry
+                            expiry_timestamp: 0,               // Unknown expiry
                             percentage_locked,
                         }));
+                    } else {
+                        debug!(
+                            "Raydium farm has {}% locked, below 5% threshold",
+                            percentage_locked
+                        );
                     }
                 }
             }
@@ -891,7 +1043,7 @@ impl LpLockVerifier {
                 debug!("No Raydium farm balance found: {}", e);
             }
         }
-        
+
         // No significant farm locks found
         Ok(None)
     }
@@ -900,8 +1052,8 @@ impl LpLockVerifier {
     ///
     /// This implementation:
     /// 1. Checks if LP tokens are held by Orca Whirlpool program
-    /// 2. Verifies tokens locked in concentrated liquidity positions
-    /// 3. Analyzes position NFT distribution
+    /// 2. Uses raw amounts (u128) for percentage calculations
+    /// 3. Only reports locked if ≥5% is in Whirlpool program
     ///
     /// # Orca Whirlpool Mechanics
     /// - Liquidity is represented as NFT positions
@@ -909,11 +1061,11 @@ impl LpLockVerifier {
     /// - Positions can be transferred but remain in program control
     ///
     /// # Returns
-    /// - Locked status if LP found in Orca program
+    /// - Locked status if LP found in Orca program (≥5%)
     /// - None otherwise (defers to general detection)
     async fn check_orca_lock(&self, mint: &str) -> Result<Option<LockStatus>> {
         debug!("Checking Orca Whirlpool locks for {}", mint);
-        
+
         let mint_pubkey = match Pubkey::from_str(mint) {
             Ok(pk) => pk,
             Err(e) => {
@@ -921,7 +1073,22 @@ impl LpLockVerifier {
                 return Ok(None);
             }
         };
-        
+
+        // Get total supply (raw amount) for percentage calculation
+        let supply_result = match self.rpc_client.get_token_supply(&mint_pubkey).await {
+            Ok(supply) => supply,
+            Err(e) => {
+                debug!("Failed to get total supply for Orca check: {}", e);
+                return Ok(None);
+            }
+        };
+
+        let total_raw = supply_result.amount.parse::<u128>().unwrap_or(0);
+        if total_raw == 0 {
+            debug!("Zero supply, cannot check Orca locks");
+            return Ok(None);
+        }
+
         // Check if LP tokens are held by the Orca Whirlpool program
         let whirlpool_program = match Pubkey::from_str(ORCA_WHIRLPOOL_PROGRAM) {
             Ok(pk) => pk,
@@ -930,37 +1097,41 @@ impl LpLockVerifier {
                 return Ok(None);
             }
         };
-        
+
         // Get the ATA for the whirlpool program
         let whirlpool_ata = get_associated_token_address(&whirlpool_program, &mint_pubkey);
-        
+
         debug!("Checking Orca Whirlpool ATA: {}", whirlpool_ata);
-        
-        match self.rpc_client.get_token_account_balance(&whirlpool_ata).await {
+
+        match self
+            .rpc_client
+            .get_token_account_balance(&whirlpool_ata)
+            .await
+        {
             Ok(balance) => {
-                let locked_amount = balance.ui_amount.unwrap_or(0.0);
-                if locked_amount > 0.0 {
-                    // Get total supply to calculate percentage
-                    let total_supply = match self.rpc_client.get_token_supply(&mint_pubkey).await {
-                        Ok(supply) => supply.ui_amount.unwrap_or(1.0),
-                        Err(_) => 1.0, // Conservative fallback
-                    };
-                    
-                    let percentage_locked = ((locked_amount / total_supply) * 100.0).min(100.0) as u8;
-                    
-                    debug!(
-                        "Found {} LP tokens locked in Orca Whirlpool ({}%)",
-                        locked_amount, percentage_locked
+                let locked_raw = balance.amount.parse::<u128>().unwrap_or(0);
+                if locked_raw > 0 {
+                    // Calculate percentage using integer math (u128)
+                    let percentage_locked = ((locked_raw * 100) / total_raw).min(100) as u8;
+
+                    info!(
+                        "Orca Whirlpool: locked_raw={}, total_raw={}, pct={}%",
+                        locked_raw, total_raw, percentage_locked
                     );
-                    
+
                     if percentage_locked >= 5 {
                         // Only report if significant amount is locked
                         return Ok(Some(LockStatus::Locked {
                             contract: ORCA_WHIRLPOOL_PROGRAM.to_string(),
                             duration_secs: 365 * 24 * 60 * 60, // Whirlpools are typically long-term
-                            expiry_timestamp: 0, // Unknown expiry
+                            expiry_timestamp: 0,               // Unknown expiry
                             percentage_locked,
                         }));
+                    } else {
+                        debug!(
+                            "Orca Whirlpool has {}% locked, below 5% threshold",
+                            percentage_locked
+                        );
                     }
                 }
             }
@@ -968,7 +1139,7 @@ impl LpLockVerifier {
                 debug!("No Orca Whirlpool balance found: {}", e);
             }
         }
-        
+
         // No significant whirlpool locks found
         Ok(None)
     }
@@ -977,10 +1148,11 @@ impl LpLockVerifier {
     ///
     /// This method uses real on-chain data:
     /// 1. Gets token largest accounts via RPC
-    /// 2. Filters secured vs unsecured addresses
-    /// 3. Calculates precise unlocked percentage
+    /// 2. Fetches each token account's OWNER via getMultipleAccounts
+    /// 3. Classifies secured vs unsecured based on OWNER public key
+    /// 4. Calculates precise unlocked percentage using integer math
     ///
-    /// Secured addresses include:
+    /// Secured OWNERS include:
     /// - Burn addresses
     /// - Lock programs
     /// - DEX programs (Raydium, Orca)
@@ -996,10 +1168,10 @@ impl LpLockVerifier {
     /// Percentage of unlocked LP tokens (0-100)
     async fn check_unlocked_lp(&self, mint: &str, platform: &str) -> Result<u8> {
         debug!("Checking unlocked LP for {} on {}", mint, platform);
-        
+
         let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint")?;
-        
-        // Get total supply for percentage calculation
+
+        // Get total supply for percentage calculation (raw amount)
         let supply_result = match self.rpc_client.get_token_supply(&mint_pubkey).await {
             Ok(supply) => supply,
             Err(e) => {
@@ -1007,15 +1179,19 @@ impl LpLockVerifier {
                 return Ok(100); // Conservative: assume 100% unlocked if we can't verify
             }
         };
-        
+
         let total_supply_raw = supply_result.amount.parse::<u128>().unwrap_or(0);
         if total_supply_raw == 0 {
             debug!("Zero supply detected");
             return Ok(0);
         }
-        
+
         // Get largest token accounts to identify where LP tokens are held
-        let largest_accounts = match self.rpc_client.get_token_largest_accounts(&mint_pubkey).await {
+        let largest_accounts = match self
+            .rpc_client
+            .get_token_largest_accounts(&mint_pubkey)
+            .await
+        {
             Ok(response) => response,
             Err(e) => {
                 debug!("Failed to get largest accounts: {}", e);
@@ -1023,43 +1199,94 @@ impl LpLockVerifier {
                 return Ok(100);
             }
         };
-        
-        debug!("Found {} largest accounts for token {}", largest_accounts.len(), mint);
-        
-        // Calculate secured vs unsecured amounts
-        let mut secured_amount: u128 = 0;
-        let mut unsecured_amount: u128 = 0;
-        
-        for account in largest_accounts {
-            let account_addr = account.address.to_string();
-            // The amount field in RpcTokenAccountBalance is a UiTokenAmount
-            // which has an 'amount' String field containing the raw value
-            let amount = account.amount.amount.parse::<u128>().unwrap_or(0);
-            
-            if self.is_address_secured(&account_addr) {
-                debug!("Secured account {}: {} tokens", account_addr, amount);
-                secured_amount += amount;
+
+        debug!(
+            "Found {} largest accounts for token {}",
+            largest_accounts.len(),
+            mint
+        );
+
+        // Collect addresses to fetch owner information (parse strings to Pubkey)
+        let addresses_to_fetch: Vec<Pubkey> = largest_accounts
+            .iter()
+            .filter_map(|acc| Pubkey::from_str(&acc.address.to_string()).ok())
+            .collect();
+
+        // Fetch account data for all largest accounts to get their owners
+        let accounts = match self
+            .rpc_client
+            .get_multiple_accounts(&addresses_to_fetch)
+            .await
+        {
+            Ok(accs) => accs,
+            Err(e) => {
+                debug!("Failed to fetch multiple accounts: {}", e);
+                // Conservative fallback: assume unlocked if we can't check
+                return Ok(100);
+            }
+        };
+
+        // Calculate secured vs unsecured amounts based on OWNER
+        let mut secured_amount_raw: u128 = 0;
+        let mut unsecured_amount_raw: u128 = 0;
+
+        for (idx, maybe_account) in accounts.iter().enumerate() {
+            let amount_raw = largest_accounts[idx]
+                .amount
+                .amount
+                .parse::<u128>()
+                .unwrap_or(0);
+            let account_addr = &largest_accounts[idx].address;
+
+            if let Some(account) = maybe_account {
+                // Parse token account to get owner using Pack trait
+                match spl_token::state::Account::unpack_from_slice(&account.data) {
+                    Ok(token_account) => {
+                        let owner_str = token_account.owner.to_string();
+
+                        // Check if OWNER is secured (not the token account address itself)
+                        if self.is_address_secured(&owner_str) {
+                            debug!(
+                                "Secured: account {} owned by {} (secured): {} raw tokens",
+                                account_addr, owner_str, amount_raw
+                            );
+                            secured_amount_raw += amount_raw;
+                        } else {
+                            debug!(
+                                "Unsecured: account {} owned by {} (unsecured): {} raw tokens",
+                                account_addr, owner_str, amount_raw
+                            );
+                            unsecured_amount_raw += amount_raw;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Failed to parse token account {}: {}", account_addr, e);
+                        // Conservative: treat unparseable accounts as unsecured
+                        unsecured_amount_raw += amount_raw;
+                    }
+                }
             } else {
-                debug!("Unsecured account {}: {} tokens", account_addr, amount);
-                unsecured_amount += amount;
+                debug!("Account {} not found, treating as unsecured", account_addr);
+                // Conservative: treat missing accounts as unsecured
+                unsecured_amount_raw += amount_raw;
             }
         }
-        
+
         // Calculate unlocked percentage using integer math
         let unlocked_percentage = if total_supply_raw > 0 {
-            ((unsecured_amount * 100) / total_supply_raw).min(100) as u8
+            ((unsecured_amount_raw * 100) / total_supply_raw).min(100) as u8
         } else {
             100 // Conservative default
         };
-        
-        debug!(
-            "LP distribution: secured={}, unsecured={}, total={}, unlocked={}%",
-            secured_amount, unsecured_amount, total_supply_raw, unlocked_percentage
+
+        info!(
+            "LP distribution (raw): secured={}, unsecured={}, total={}, unlocked={}%",
+            secured_amount_raw, unsecured_amount_raw, total_supply_raw, unlocked_percentage
         );
-        
+
         Ok(unlocked_percentage)
     }
-    
+
     /// Check if an address is considered secured (burn, lock, or DEX program)
     ///
     /// An address is considered secured if it's:
@@ -1082,25 +1309,25 @@ impl LpLockVerifier {
             debug!("Address {} is a burn address", address);
             return true;
         }
-        
+
         // Check if it's a known lock program
         if LOCK_PROGRAMS.contains(&address) {
             debug!("Address {} is a lock program", address);
             return true;
         }
-        
+
         // Check if it's a CEX address
         if CEX_ADDRESSES.contains(&address) {
             debug!("Address {} is a CEX wallet", address);
             return true;
         }
-        
+
         // Check if it's a bridge program
         if BRIDGE_PROGRAMS.contains(&address) {
             debug!("Address {} is a bridge program", address);
             return true;
         }
-        
+
         // Check if it's a known DEX or farm program
         let secured_programs = [
             RAYDIUM_AMM_PROGRAM,
@@ -1110,18 +1337,18 @@ impl LpLockVerifier {
             "9W959DqEETiGZocYWCQPaJ6sBmUzgfxXfqGeTEdp3aQP", // Orca v1
             "9qvG1zUp8xF1Bi4m6UdRNby1BAAuaDrUxSpv4CmRRMjL", // Orca v2
         ];
-        
+
         if secured_programs.contains(&address) {
             debug!("Address {} is a secured program (DEX/farm)", address);
             return true;
         }
-        
+
         // Check for system program (common burn destination)
         if address == "11111111111111111111111111111111" {
             debug!("Address {} is the system program", address);
             return true;
         }
-        
+
         false
     }
 
@@ -1207,14 +1434,14 @@ impl LpLockVerifier {
                 burned_percentage,
                 ..
             } => {
-                let total_secured = (*locked_percentage as u16 + *burned_percentage as u16).min(100) as u8;
-                total_secured
+                // Combine locked and burned percentages
+                (*locked_percentage as u16 + *burned_percentage as u16).min(100) as u8
             }
             LockStatus::Unlocked {
                 percentage_unlocked,
             } => {
                 // Invert: more unlocked = lower score
-                (100 - percentage_unlocked).max(0)
+                100 - percentage_unlocked
             }
             LockStatus::Unknown { .. } => 0, // Unknown = zero safety
         }
@@ -1270,7 +1497,10 @@ impl LpLockVerifier {
             LockStatus::Burned {
                 percentage_burned, ..
             } => {
-                notes.push(format!("{}% of LP tokens permanently burned", percentage_burned));
+                notes.push(format!(
+                    "{}% of LP tokens permanently burned",
+                    percentage_burned
+                ));
                 if *percentage_burned >= 95 {
                     notes.push("✅ Excellent: LP tokens burned (rug-pull impossible)".to_string());
                 }
@@ -1320,7 +1550,9 @@ mod tests {
     #[test]
     fn test_risk_level_calculation() {
         let config = LpLockConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let verifier = LpLockVerifier::new(config, rpc);
 
         // Test fully locked with long duration
@@ -1370,7 +1602,9 @@ mod tests {
     #[test]
     fn test_safety_score_calculation() {
         let config = LpLockConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let verifier = LpLockVerifier::new(config, rpc);
 
         // Test fully locked with 1 year duration
@@ -1399,7 +1633,9 @@ mod tests {
     #[test]
     fn test_auto_reject_logic() {
         let config = LpLockConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let verifier = LpLockVerifier::new(config, rpc);
 
         // Test critical risk should auto-reject
@@ -1423,7 +1659,9 @@ mod tests {
     #[test]
     fn test_is_address_secured() {
         let config = LpLockConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let verifier = LpLockVerifier::new(config, rpc);
 
         // Test burn addresses are secured
@@ -1441,7 +1679,7 @@ mod tests {
 
         // Test farm programs are secured
         assert!(verifier.is_address_secured("EhhTKczWMGQt46ynNeRX1WfeagwwJd7ufHvCDjRxjo5Q")); // Raydium Farm
-        
+
         // Test Pump.fun is secured
         assert!(verifier.is_address_secured("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"));
 
@@ -1453,7 +1691,9 @@ mod tests {
     #[test]
     fn test_partial_lock_safety_score() {
         let config = LpLockConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let verifier = LpLockVerifier::new(config, rpc);
 
         // Test partial: 60% locked + 40% burned = 100%
@@ -1484,7 +1724,9 @@ mod tests {
     #[test]
     fn test_unlocked_safety_score() {
         let config = LpLockConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let verifier = LpLockVerifier::new(config, rpc);
 
         // Test 100% unlocked = 0 safety

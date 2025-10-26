@@ -155,8 +155,8 @@ impl Default for FeatureWeights {
             creator_sell_speed: 0.09,
             metadata_quality: 0.09,
             social_activity: 0.05,
-            dex_trending: 0.05,      // 5% weight for trending status
-            dex_momentum: 0.05,      // 5% weight for trending momentum
+            dex_trending: 0.05, // 5% weight for trending status
+            dex_momentum: 0.05, // 5% weight for trending momentum
         }
     }
 }
@@ -333,7 +333,7 @@ impl Default for OracleConfig {
                 creator_sell_speed: 0.05, // Less concern about creator selling in bull market
                 metadata_quality: 0.05,
                 social_activity: 0.00,
-                dex_trending: 0.06,  // Important signal in bull market
+                dex_trending: 0.06, // Important signal in bull market
                 dex_momentum: 0.03,
             },
             thresholds: ScoreThresholds {
@@ -358,8 +358,8 @@ impl Default for OracleConfig {
                 creator_sell_speed: 0.18, // Very important - avoid fast selling creators
                 metadata_quality: 0.09,
                 social_activity: 0.00,
-                dex_trending: 0.04,  // Trending can indicate pump and dump
-                dex_momentum: 0.03,  // Watch for negative momentum
+                dex_trending: 0.04, // Trending can indicate pump and dump
+                dex_momentum: 0.03, // Watch for negative momentum
             },
             thresholds: ScoreThresholds {
                 min_liquidity_sol: 20.0,      // Higher requirement in bear market
@@ -383,8 +383,8 @@ impl Default for OracleConfig {
                 creator_sell_speed: 0.13,
                 metadata_quality: 0.09,
                 social_activity: 0.00,
-                dex_trending: 0.06,  // Trending signals more reliable
-                dex_momentum: 0.06,  // Momentum can signal breakout
+                dex_trending: 0.06, // Trending signals more reliable
+                dex_momentum: 0.06, // Momentum can signal breakout
             },
             thresholds: ScoreThresholds::default(),
         };

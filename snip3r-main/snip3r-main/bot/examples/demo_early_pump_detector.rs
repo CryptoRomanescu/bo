@@ -66,7 +66,9 @@ async fn main() -> Result<()> {
 
 async fn demo_single_analysis() -> Result<()> {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     let mint = "DemoToken1234567890ABC";
@@ -87,7 +89,9 @@ async fn demo_single_analysis() -> Result<()> {
 
 async fn demo_multi_platform() -> Result<()> {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     let platforms = vec![
@@ -115,7 +119,9 @@ async fn demo_multi_platform() -> Result<()> {
 }
 
 async fn demo_parallel_vs_sequential() -> Result<()> {
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
 
     // Test parallel mode
     println!("Testing PARALLEL mode (5 iterations):");
@@ -129,10 +135,18 @@ async fn demo_parallel_vs_sequential() -> Result<()> {
     for i in 0..5 {
         let mint = format!("ParallelTest{}", i);
         let result = detector_parallel
-            .analyze(&mint, chrono::Utc::now().timestamp() as u64 - 20, "pump.fun")
+            .analyze(
+                &mint,
+                chrono::Utc::now().timestamp() as u64 - 20,
+                "pump.fun",
+            )
             .await?;
         parallel_times.push(result.timings.total_decision_time_ms);
-        println!("  Iteration {}: {}ms", i + 1, result.timings.total_decision_time_ms);
+        println!(
+            "  Iteration {}: {}ms",
+            i + 1,
+            result.timings.total_decision_time_ms
+        );
     }
 
     let parallel_avg: u64 = parallel_times.iter().sum::<u64>() / parallel_times.len() as u64;
@@ -151,10 +165,18 @@ async fn demo_parallel_vs_sequential() -> Result<()> {
     for i in 0..5 {
         let mint = format!("SequentialTest{}", i);
         let result = detector_sequential
-            .analyze(&mint, chrono::Utc::now().timestamp() as u64 - 20, "pump.fun")
+            .analyze(
+                &mint,
+                chrono::Utc::now().timestamp() as u64 - 20,
+                "pump.fun",
+            )
             .await?;
         sequential_times.push(result.timings.total_decision_time_ms);
-        println!("  Iteration {}: {}ms", i + 1, result.timings.total_decision_time_ms);
+        println!(
+            "  Iteration {}: {}ms",
+            i + 1,
+            result.timings.total_decision_time_ms
+        );
     }
 
     let sequential_avg: u64 = sequential_times.iter().sum::<u64>() / sequential_times.len() as u64;
@@ -172,7 +194,9 @@ async fn demo_parallel_vs_sequential() -> Result<()> {
 
 async fn demo_batch_processing() -> Result<()> {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = Arc::new(EarlyPumpDetector::new(config, rpc));
 
     let batch_size = 100;
@@ -202,7 +226,8 @@ async fn demo_batch_processing() -> Result<()> {
                     2 => "jupiter",
                     _ => "pumpswap",
                 };
-                let deploy_timestamp = chrono::Utc::now().timestamp() as u64 - ((token_id % 60) as u64);
+                let deploy_timestamp =
+                    chrono::Utc::now().timestamp() as u64 - ((token_id % 60) as u64);
 
                 detector.analyze(&mint, deploy_timestamp, program).await
             });
@@ -237,20 +262,44 @@ async fn demo_batch_processing() -> Result<()> {
     println!("📊 BATCH RESULTS:");
     println!("  Total tokens:       {}", batch_size);
     println!("  Wall time:          {:.2}s", elapsed.as_secs_f64());
-    println!("  Throughput:         {:.1} tokens/sec", batch_size as f64 / elapsed.as_secs_f64());
+    println!(
+        "  Throughput:         {:.1} tokens/sec",
+        batch_size as f64 / elapsed.as_secs_f64()
+    );
     println!();
-    println!("  BUY decisions:      {} ({:.1}%)", buy_count, buy_count as f64 / batch_size as f64 * 100.0);
-    println!("  PASS decisions:     {} ({:.1}%)", pass_count, pass_count as f64 / batch_size as f64 * 100.0);
+    println!(
+        "  BUY decisions:      {} ({:.1}%)",
+        buy_count,
+        buy_count as f64 / batch_size as f64 * 100.0
+    );
+    println!(
+        "  PASS decisions:     {} ({:.1}%)",
+        pass_count,
+        pass_count as f64 / batch_size as f64 * 100.0
+    );
     println!();
-    println!("  Avg time/token:     {:.2}ms", total_time_ms as f64 / batch_size as f64);
-    println!("  Under 100s:         {} ({:.1}%)", under_100s, under_100s as f64 / batch_size as f64 * 100.0);
+    println!(
+        "  Avg time/token:     {:.2}ms",
+        total_time_ms as f64 / batch_size as f64
+    );
+    println!(
+        "  Under 100s:         {} ({:.1}%)",
+        under_100s,
+        under_100s as f64 / batch_size as f64 * 100.0
+    );
     println!();
 
     let success_rate = under_100s as f64 / batch_size as f64;
     if success_rate >= 0.95 {
-        println!("  ✅ SUCCESS: {:.1}% under 100s (target: 95%)", success_rate * 100.0);
+        println!(
+            "  ✅ SUCCESS: {:.1}% under 100s (target: 95%)",
+            success_rate * 100.0
+        );
     } else {
-        println!("  ⚠️  WARNING: Only {:.1}% under 100s (target: 95%)", success_rate * 100.0);
+        println!(
+            "  ⚠️  WARNING: Only {:.1}% under 100s (target: 95%)",
+            success_rate * 100.0
+        );
     }
 
     Ok(())
@@ -272,9 +321,18 @@ fn print_analysis_result(result: &h_5n1p3r::oracle::EarlyPumpAnalysis) {
 
     println!();
     println!("⏱️  TIMING:");
-    println!("  Deploy → Detection:   {}ms", result.timings.deploy_to_detection_ms);
-    println!("  Detection → Decision: {}ms", result.timings.detection_to_decision_ms);
-    println!("  Total:                {}ms", result.timings.total_decision_time_ms);
+    println!(
+        "  Deploy → Detection:   {}ms",
+        result.timings.deploy_to_detection_ms
+    );
+    println!(
+        "  Detection → Decision: {}ms",
+        result.timings.detection_to_decision_ms
+    );
+    println!(
+        "  Total:                {}ms",
+        result.timings.total_decision_time_ms
+    );
 
     if result.timings.total_decision_time_ms < 100_000 {
         println!("  ✅ Within 100s target!");
@@ -284,17 +342,47 @@ fn print_analysis_result(result: &h_5n1p3r::oracle::EarlyPumpAnalysis) {
 
     println!();
     println!("📈 CHECK BREAKDOWN:");
-    println!("  Supply Concentration: {}/100 (lower is better)", result.check_results.supply_concentration);
-    println!("  LP Lock:              {}/100 (higher is better)", result.check_results.lp_lock);
-    println!("  Wash Trading Risk:    {}/100 (lower is better)", result.check_results.wash_trading_risk);
-    println!("  Smart Money:          {}/100 (higher is better)", result.check_results.smart_money);
-    println!("  Holder Growth:        {}/100 (higher is better)", result.check_results.holder_growth);
+    println!(
+        "  Supply Concentration: {}/100 (lower is better)",
+        result.check_results.supply_concentration
+    );
+    println!(
+        "  LP Lock:              {}/100 (higher is better)",
+        result.check_results.lp_lock
+    );
+    println!(
+        "  Wash Trading Risk:    {}/100 (lower is better)",
+        result.check_results.wash_trading_risk
+    );
+    println!(
+        "  Smart Money:          {}/100 (higher is better)",
+        result.check_results.smart_money
+    );
+    println!(
+        "  Holder Growth:        {}/100 (higher is better)",
+        result.check_results.holder_growth
+    );
 
     println!();
     println!("⏱️  CHECK TIMINGS:");
-    println!("  Supply Concentration: {}ms", result.timings.check_timings.supply_concentration_ms);
-    println!("  LP Lock:              {}ms", result.timings.check_timings.lp_lock_ms);
-    println!("  Wash Trading:         {}ms", result.timings.check_timings.wash_trading_ms);
-    println!("  Smart Money:          {}ms", result.timings.check_timings.smart_money_ms);
-    println!("  Holder Growth:        {}ms", result.timings.check_timings.holder_growth_ms);
+    println!(
+        "  Supply Concentration: {}ms",
+        result.timings.check_timings.supply_concentration_ms
+    );
+    println!(
+        "  LP Lock:              {}ms",
+        result.timings.check_timings.lp_lock_ms
+    );
+    println!(
+        "  Wash Trading:         {}ms",
+        result.timings.check_timings.wash_trading_ms
+    );
+    println!(
+        "  Smart Money:          {}ms",
+        result.timings.check_timings.smart_money_ms
+    );
+    println!(
+        "  Holder Growth:        {}ms",
+        result.timings.check_timings.holder_growth_ms
+    );
 }

@@ -2,13 +2,13 @@
 //!
 //! Demonstrates the wash trading detection capabilities with graph analysis.
 
+use chrono::Utc;
 use h_5n1p3r::oracle::graph_analyzer::{
-    GraphAnalyzerConfig, OnChainGraphAnalyzer, WashTradingDetector, WashTradingConfig,
-    WashTradingScorer, TransactionEdge, TransactionGraph,
+    GraphAnalyzerConfig, OnChainGraphAnalyzer, TransactionEdge, TransactionGraph,
+    WashTradingConfig, WashTradingDetector, WashTradingScorer,
 };
 use solana_client::nonblocking::rpc_client::RpcClient;
 use std::sync::Arc;
-use chrono::Utc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,7 +47,7 @@ async fn demo_basic_detection() -> anyhow::Result<()> {
 
     // Scenario: Three wallets engaging in circular wash trading
     println!("Creating circular trading pattern: W1 → W2 → W3 → W1");
-    
+
     // First cycle
     graph.add_transaction(
         "wallet_1",
@@ -129,7 +129,10 @@ async fn demo_basic_detection() -> anyhow::Result<()> {
     let result = detector.detect(&graph)?;
 
     println!("Results:");
-    println!("  Wash Probability: {:.1}%", result.wash_probability * 100.0);
+    println!(
+        "  Wash Probability: {:.1}%",
+        result.wash_probability * 100.0
+    );
     println!("  Circularity Score: {:.2}", result.circularity_score);
     println!("  Risk Score: {}/100", result.risk_score);
     println!("  Circular Paths: {}", result.circular_paths.len());
@@ -140,8 +143,9 @@ async fn demo_basic_detection() -> anyhow::Result<()> {
     if !result.circular_paths.is_empty() {
         println!("\nDetected Circular Paths:");
         for (i, path) in result.circular_paths.iter().enumerate().take(3) {
-            println!("  Path {}: {} → ... (repeats {} times)", 
-                i + 1, 
+            println!(
+                "  Path {}: {} → ... (repeats {} times)",
+                i + 1,
                 path.path.first().unwrap_or(&"?".to_string()),
                 path.repeat_count
             );
@@ -164,7 +168,7 @@ async fn demo_scoring_api() -> anyhow::Result<()> {
 
     // Normal trading: W1 → W2, W3 → W4 (no circular pattern)
     println!("Creating normal trading pattern (non-circular)");
-    
+
     graph.add_transaction(
         "buyer_1",
         "seller_1",

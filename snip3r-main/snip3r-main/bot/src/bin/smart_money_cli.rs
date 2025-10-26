@@ -4,9 +4,7 @@
 //! and generating real-time pump alerts
 
 use anyhow::{Context, Result};
-use h_5n1p3r::oracle::{
-    SmartMoneyConfig, SmartMoneyTracker, SmartWalletProfile, DataSource
-};
+use h_5n1p3r::oracle::{DataSource, SmartMoneyConfig, SmartMoneyTracker, SmartWalletProfile};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -32,7 +30,10 @@ async fn main() -> Result<()> {
         "check" => {
             if args.len() < 3 {
                 eprintln!("Usage: {} check <token_mint> [deploy_timestamp]", args[0]);
-                eprintln!("Example: {} check 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", args[0]);
+                eprintln!(
+                    "Example: {} check 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+                    args[0]
+                );
                 return Ok(());
             }
 
@@ -49,7 +50,10 @@ async fn main() -> Result<()> {
         "alert" => {
             if args.len() < 3 {
                 eprintln!("Usage: {} alert <token_mint> [deploy_timestamp]", args[0]);
-                eprintln!("Example: {} alert 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", args[0]);
+                eprintln!(
+                    "Example: {} alert 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+                    args[0]
+                );
                 return Ok(());
             }
 
@@ -65,7 +69,10 @@ async fn main() -> Result<()> {
         "add-wallet" => {
             if args.len() < 3 {
                 eprintln!("Usage: {} add-wallet <wallet_address>", args[0]);
-                eprintln!("Example: {} add-wallet 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", args[0]);
+                eprintln!(
+                    "Example: {} add-wallet 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+                    args[0]
+                );
                 return Ok(());
             }
 
@@ -82,7 +89,8 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let duration = args.get(2)
+            let duration = args
+                .get(2)
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(300); // Default 5 minutes
 
@@ -116,9 +124,18 @@ fn print_usage(program_name: &str) {
     println!("    help                          Show this help message");
     println!();
     println!("EXAMPLES:");
-    println!("    {} check 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", program_name);
-    println!("    {} alert 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", program_name);
-    println!("    {} add-wallet 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", program_name);
+    println!(
+        "    {} check 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+        program_name
+    );
+    println!(
+        "    {} alert 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+        program_name
+    );
+    println!(
+        "    {} add-wallet 9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+        program_name
+    );
     println!("    {} monitor 300", program_name);
     println!();
     println!("ENVIRONMENT VARIABLES:");
@@ -169,7 +186,10 @@ async fn check_smart_money(token_mint: &str, deploy_timestamp: u64) -> Result<()
     // Provide recommendation
     if wallet_count >= 2 {
         println!("🚨 RECOMMENDATION: STRONG BUY SIGNAL");
-        println!("   {} smart wallets detected within 60s window", wallet_count);
+        println!(
+            "   {} smart wallets detected within 60s window",
+            wallet_count
+        );
     } else if wallet_count == 1 {
         println!("⚠️  RECOMMENDATION: MONITOR CLOSELY");
         println!("   1 smart wallet detected, waiting for more confirmations");
@@ -191,9 +211,7 @@ async fn check_alert(token_mint: &str, deploy_timestamp: u64) -> Result<()> {
     let tracker = Arc::new(SmartMoneyTracker::new(config));
 
     let start = std::time::Instant::now();
-    let alert = tracker
-        .check_alert(token_mint, deploy_timestamp)
-        .await?;
+    let alert = tracker.check_alert(token_mint, deploy_timestamp).await?;
     let elapsed = start.elapsed();
 
     if let Some(alert) = alert {
@@ -210,14 +228,22 @@ async fn check_alert(token_mint: &str, deploy_timestamp: u64) -> Result<()> {
 
         println!("📝 SMART WALLET ACTIVITY:");
         for (i, tx) in alert.transactions.iter().enumerate() {
-            println!("   {}. {} bought {:.4} SOL", i + 1, tx.wallet, tx.amount_sol);
+            println!(
+                "   {}. {} bought {:.4} SOL",
+                i + 1,
+                tx.wallet,
+                tx.amount_sol
+            );
             println!("      At: {} | Tx: {}", tx.timestamp, tx.signature);
         }
         println!();
 
         println!("✅ ACTION: EXECUTE BUY ORDER");
         println!("   Confidence: HIGH");
-        println!("   Reason: {} smart wallets within {}s", alert.unique_wallets, alert.time_to_first_buy_secs);
+        println!(
+            "   Reason: {} smart wallets within {}s",
+            alert.unique_wallets, alert.time_to_first_buy_secs
+        );
     } else {
         println!("ℹ️  No alert triggered");
         println!("   Response time: {:.2}s", elapsed.as_secs_f64());
@@ -300,7 +326,7 @@ async fn monitor_smart_money(duration_secs: u64) -> Result<()> {
     let start = std::time::Instant::now();
     while start.elapsed().as_secs() < duration_secs {
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-        
+
         let elapsed = start.elapsed().as_secs();
         if elapsed % 30 == 0 {
             println!("⏱️  Monitoring... {}s elapsed", elapsed);

@@ -6,8 +6,8 @@
 use prometheus::{
     register_gauge_vec_with_registry, register_int_counter_vec_with_registry,
     register_int_counter_with_registry, register_int_gauge_vec_with_registry,
-    register_int_gauge_with_registry, GaugeVec, IntCounterVec, IntCounter, IntGauge, 
-    IntGaugeVec, Opts, Registry,
+    register_int_gauge_with_registry, GaugeVec, IntCounter, IntCounterVec, IntGauge, IntGaugeVec,
+    Opts, Registry,
 };
 use rand::Rng;
 use std::collections::{HashMap, VecDeque};
@@ -296,7 +296,7 @@ impl CircuitBreakerMetrics {
             // Create unregistered fallback metric (won't panic)
             IntGauge::new(
                 "circuit_breaker_monitoring_task_count_fallback",
-                "fallback gauge for monitoring task count"
+                "fallback gauge for monitoring task count",
             )
             .expect("Creating unregistered fallback IntGauge should never fail")
         });
@@ -316,7 +316,7 @@ impl CircuitBreakerMetrics {
             // Create unregistered fallback metric (won't panic)
             IntGauge::new(
                 "circuit_breaker_active_tasks_fallback",
-                "fallback gauge for active tasks"
+                "fallback gauge for active tasks",
             )
             .expect("Creating unregistered fallback IntGauge should never fail")
         });
@@ -341,9 +341,9 @@ impl CircuitBreakerMetrics {
             IntGaugeVec::new(
                 Opts::new(
                     "circuit_breaker_state_fallback",
-                    "fallback gauge vec for circuit state"
+                    "fallback gauge vec for circuit state",
                 ),
-                &["endpoint"]
+                &["endpoint"],
             )
             .expect("Creating unregistered fallback IntGaugeVec should never fail")
         });
@@ -413,9 +413,9 @@ impl CircuitBreakerMetrics {
             GaugeVec::new(
                 Opts::new(
                     "circuit_breaker_latency_ms_fallback",
-                    "fallback gauge vec for latency"
+                    "fallback gauge vec for latency",
                 ),
-                &["endpoint"]
+                &["endpoint"],
             )
             .expect("Creating unregistered fallback GaugeVec should never fail")
         });
@@ -437,9 +437,9 @@ impl CircuitBreakerMetrics {
             IntGaugeVec::new(
                 Opts::new(
                     "circuit_breaker_last_opened_fallback",
-                    "fallback gauge vec for last opened"
+                    "fallback gauge vec for last opened",
                 ),
-                &["endpoint"]
+                &["endpoint"],
             )
             .expect("Creating unregistered fallback IntGaugeVec should never fail")
         });
@@ -549,10 +549,10 @@ pub struct CircuitBreaker {
 impl CircuitBreaker {
     /// Threshold for slow cancellation warning (seconds)
     const SLOW_CANCELLATION_THRESHOLD_SECS: u64 = 5;
-    
+
     /// Threshold for long-running task warning (seconds)
     const LONG_RUNNING_TASK_THRESHOLD_SECS: u64 = 10;
-    
+
     /// Create a new circuit breaker.
     pub fn new(failure_threshold: u32, cooldown_seconds: u64, sample_size: usize) -> Self {
         let registry = Registry::new();
@@ -676,7 +676,10 @@ impl CircuitBreaker {
             EndpointState::CoolingDown => 2,
             EndpointState::HalfOpen => 3,
         };
-        if let Ok(gauge) = metrics.circuit_state.get_metric_with_label_values(&[endpoint]) {
+        if let Ok(gauge) = metrics
+            .circuit_state
+            .get_metric_with_label_values(&[endpoint])
+        {
             gauge.set(state_value);
             debug!(
                 endpoint = %endpoint,
@@ -688,7 +691,10 @@ impl CircuitBreaker {
         }
 
         // Update consecutive failures gauge with endpoint label
-        if let Ok(gauge) = metrics.consecutive_failures.get_metric_with_label_values(&[endpoint]) {
+        if let Ok(gauge) = metrics
+            .consecutive_failures
+            .get_metric_with_label_values(&[endpoint])
+        {
             gauge.set(consecutive_failures as i64);
             debug!(
                 endpoint = %endpoint,
@@ -699,7 +705,10 @@ impl CircuitBreaker {
         }
 
         // Update latency metric with endpoint label
-        if let Ok(gauge) = metrics.probe_latency.get_metric_with_label_values(&[endpoint]) {
+        if let Ok(gauge) = metrics
+            .probe_latency
+            .get_metric_with_label_values(&[endpoint])
+        {
             gauge.set(avg_latency);
             debug!(
                 endpoint = %endpoint,
@@ -717,7 +726,10 @@ impl CircuitBreaker {
                     .unwrap_or_default()
                     .as_secs() as i64
                     - cooldown.elapsed().as_secs() as i64;
-                if let Ok(gauge) = metrics.last_opened.get_metric_with_label_values(&[endpoint]) {
+                if let Ok(gauge) = metrics
+                    .last_opened
+                    .get_metric_with_label_values(&[endpoint])
+                {
                     gauge.set(timestamp);
                     debug!(
                         endpoint = %endpoint,
@@ -730,7 +742,10 @@ impl CircuitBreaker {
         }
 
         // Update success ratio metric with endpoint label
-        if let Ok(gauge) = metrics.probe_success_ratio.get_metric_with_label_values(&[endpoint]) {
+        if let Ok(gauge) = metrics
+            .probe_success_ratio
+            .get_metric_with_label_values(&[endpoint])
+        {
             gauge.set(success_rate);
             debug!(
                 endpoint = %endpoint,
@@ -741,7 +756,10 @@ impl CircuitBreaker {
         }
 
         // Update health score metric with endpoint label
-        if let Ok(gauge) = metrics.health_score.get_metric_with_label_values(&[endpoint]) {
+        if let Ok(gauge) = metrics
+            .health_score
+            .get_metric_with_label_values(&[endpoint])
+        {
             gauge.set(health_score);
             debug!(
                 endpoint = %endpoint,
@@ -907,7 +925,10 @@ impl CircuitBreaker {
         // Increment total failures counter (separate from consecutive failures gauge)
         {
             let metrics = self.metrics.read().await;
-            if let Ok(counter) = metrics.failures_total.get_metric_with_label_values(&[endpoint]) {
+            if let Ok(counter) = metrics
+                .failures_total
+                .get_metric_with_label_values(&[endpoint])
+            {
                 counter.inc();
                 debug!(
                     endpoint = %endpoint,
@@ -952,12 +973,10 @@ impl CircuitBreaker {
             let health = health_map.get(endpoint);
 
             if let Some(health) = health {
-                let cooldown_info = health
-                    .cooldown_start
-                    .map(|start| {
-                        // Clone the backoff strategy to calculate delay outside the lock
-                        (start, health.backoff_strategy.clone())
-                    });
+                let cooldown_info = health.cooldown_start.map(|start| {
+                    // Clone the backoff strategy to calculate delay outside the lock
+                    (start, health.backoff_strategy.clone())
+                });
                 (health.state.clone(), health.canary_count, cooldown_info)
             } else {
                 // New endpoint, create with defaults
@@ -1218,7 +1237,8 @@ impl CircuitBreaker {
                     EndpointState::CoolingDown => {
                         health.cooldown_start = Some(Instant::now());
                         // Increment backoff strategy attempt counter
-                        health.backoff_strategy.attempt = (health.backoff_strategy.attempt + 1).min(BackoffStrategy::MAX_ATTEMPT);
+                        health.backoff_strategy.attempt =
+                            (health.backoff_strategy.attempt + 1).min(BackoffStrategy::MAX_ATTEMPT);
                     }
                     EndpointState::Healthy => {
                         health.backoff_strategy.reset();
@@ -1367,17 +1387,17 @@ impl CircuitBreaker {
     }
 
     /// Start a background monitoring task for an endpoint.
-    /// 
+    ///
     /// ## Cooperatively-Cancellable Task Pattern (REQUIRED)
-    /// 
+    ///
     /// **All monitoring tasks MUST be designed to cooperate with cancellation signals.**
     /// Tasks that ignore the CancellationToken or perform blocking syscalls/FFI will:
     /// 1. Delay shutdown by up to 7 seconds (Phase 1 + Phase 2 timeouts)
     /// 2. May remain stuck if blocking operations are uninterruptible
     /// 3. Generate warning logs and metrics alerts
-    /// 
+    ///
     /// ## Required Pattern for Task Implementation
-    /// 
+    ///
     /// ```rust,ignore
     /// async fn my_monitoring_task(cancel_token: CancellationToken) {
     ///     loop {
@@ -1396,14 +1416,14 @@ impl CircuitBreaker {
     ///     }
     /// }
     /// ```
-    /// 
+    ///
     /// ## Sanity Checks
-    /// 
+    ///
     /// This method monitors task completion and will:
     /// - Log warnings if tasks don't respond to cancellation within expected time
     /// - Increment alert metrics for stuck tasks
     /// - Track task lifecycle in Prometheus metrics
-    /// 
+    ///
     /// See `CIRCUIT_BREAKER_TASK_PATTERNS.md` for detailed examples and best practices.
     pub async fn start_monitoring_task<F>(&self, endpoint: String, task: F) -> Result<(), String>
     where
@@ -1422,9 +1442,12 @@ impl CircuitBreaker {
                 metrics.monitoring_task_count.inc();
                 metrics.active_tasks.inc();
                 // Read the values after increment to ensure visibility
-                (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+                (
+                    metrics.monitoring_task_count.get(),
+                    metrics.active_tasks.get(),
+                )
             };
-            
+
             let start_time = std::time::Instant::now();
             info!(
                 endpoint = %endpoint_for_log,
@@ -1441,7 +1464,7 @@ impl CircuitBreaker {
                         elapsed_secs = elapsed.as_secs(),
                         "Monitoring task cancelled cooperatively"
                     );
-                    
+
                     // SANITY CHECK: Warn if cancellation took too long
                     if elapsed > std::time::Duration::from_secs(Self::SLOW_CANCELLATION_THRESHOLD_SECS) {
                         warn!(
@@ -1467,10 +1490,12 @@ impl CircuitBreaker {
             let metrics = metrics_clone.read().await;
             metrics.active_tasks.dec();
             let remaining_active = metrics.active_tasks.get();
-            
+
             // SANITY CHECK: Verify task cleanup completed
             let total_elapsed = start_time.elapsed();
-            if total_elapsed > std::time::Duration::from_secs(Self::LONG_RUNNING_TASK_THRESHOLD_SECS) {
+            if total_elapsed
+                > std::time::Duration::from_secs(Self::LONG_RUNNING_TASK_THRESHOLD_SECS)
+            {
                 warn!(
                     endpoint = %endpoint_for_log,
                     total_elapsed_secs = total_elapsed.as_secs(),
@@ -1479,7 +1504,7 @@ impl CircuitBreaker {
                     "Task ran for longer than expected - verify cancellation handling"
                 );
             }
-            
+
             info!(
                 endpoint = %endpoint_for_log,
                 active_tasks = remaining_active,
@@ -1518,7 +1543,7 @@ impl CircuitBreaker {
     }
 
     /// Helper function to log JoinError with full details for root-cause analysis.
-    /// 
+    ///
     /// This ensures consistent, structured logging of all JoinError occurrences
     /// across both shutdown phases.
     #[inline]
@@ -1529,30 +1554,30 @@ impl CircuitBreaker {
             "[{}] Full JoinError details for root-cause analysis", phase
         );
     }
-    
+
     /// Deterministically shutdown a task with two-phase logic.
-    /// 
+    ///
     /// ## Shutdown Phases
-    /// 
+    ///
     /// **Phase 1 (Graceful)**: Signal cancellation via CancellationToken and wait up to 5 seconds
     /// for task to complete cooperatively. This gives tasks time to clean up resources, flush
     /// buffers, and exit gracefully.
-    /// 
+    ///
     /// **Phase 2 (Forced)**: If Phase 1 times out, forcibly abort the task via JoinHandle::abort()
     /// and wait up to 2 seconds for abort confirmation. This ensures no orphaned tasks remain.
-    /// 
+    ///
     /// ## Logging Contract
-    /// 
+    ///
     /// All outcomes are logged with full context:
     /// - **Completed gracefully**: Task responded to cancellation and exited cleanly (info)
     /// - **Cancelled**: Task was aborted by Phase 2 (info)
     /// - **Panicked**: Task panicked in either phase, with full JoinError details (warn)
     /// - **Timeout**: Phase 1 timeout triggers Phase 2; Phase 2 timeout indicates stuck task (warn)
-    /// 
+    ///
     /// Phase 1 and Phase 2 logs are clearly separated with phase markers for observability.
-    /// 
+    ///
     /// ## Guarantees
-    /// 
+    ///
     /// - No orphaned tasks: Either task completes or JoinHandle is dropped after timeout
     /// - No resource leaks: Deterministic cleanup within 7 seconds maximum
     /// - Full diagnostics: All JoinError states logged with context
@@ -1564,12 +1589,14 @@ impl CircuitBreaker {
 
         // Use tokio::time::timeout to wait for completion OR timeout while keeping handle ownership
         let phase1_result = tokio::time::timeout(Duration::from_secs(5), &mut handle).await;
-        
+
         match phase1_result {
             Ok(Ok(())) => {
                 // Task completed gracefully - best case scenario
                 info!("[Phase 1] ✓ Task completed gracefully (outcome: success)");
-                debug!("[Phase 1] Task responded to cancellation and exited cleanly within timeout");
+                debug!(
+                    "[Phase 1] Task responded to cancellation and exited cleanly within timeout"
+                );
             }
             Ok(Err(e)) => {
                 // Task panicked during graceful shutdown - log full diagnostics
@@ -1580,7 +1607,7 @@ impl CircuitBreaker {
                     outcome = "panic",
                     "[Phase 1] ✗ Task panicked during graceful shutdown"
                 );
-                
+
                 // Extract and log panic details if available
                 if e.is_panic() {
                     warn!(
@@ -1599,12 +1626,12 @@ impl CircuitBreaker {
                 warn!("[Phase 1] ✗ Timeout after 5s - task did not respond to cancellation (outcome: timeout)");
                 debug!("[Phase 1] Task either ignored CancellationToken or is stuck in blocking operation");
                 info!("[Phase 1→2] Transitioning to Phase 2: forced abort");
-                
+
                 // Phase 2: Force abort the task
                 info!("[Phase 2] Calling JoinHandle::abort() for forced termination");
                 debug!("[Phase 2] Forcing task cancellation regardless of cooperation");
                 handle.abort();
-                
+
                 // Wait up to 2 seconds for abort confirmation
                 // CRITICAL: JoinHandle ownership transferred to timeout, ensuring cleanup
                 debug!("[Phase 2] Waiting up to 2s for abort confirmation");
@@ -1613,7 +1640,9 @@ impl CircuitBreaker {
                     Ok(Ok(())) => {
                         // Task completed after abort (unlikely but possible - race condition)
                         info!("[Phase 2] ✓ Task completed after abort signal (outcome: completed)");
-                        debug!("[Phase 2] Task may have completed naturally just as abort was called");
+                        debug!(
+                            "[Phase 2] Task may have completed naturally just as abort was called"
+                        );
                     }
                     Ok(Err(e)) if e.is_cancelled() => {
                         // Task was successfully aborted - expected outcome for Phase 2
@@ -1671,14 +1700,14 @@ impl CircuitBreaker {
                         );
                     }
                 }
-                
+
                 // CRITICAL: Explicit confirmation that JoinHandle has been consumed and dropped
                 info!("[Shutdown Complete] Total elapsed time: ~7s (5s graceful + 2s abort)");
                 debug!("[Shutdown Complete] Task shutdown sequence finished, resources released");
                 debug!("[Shutdown Complete] JoinHandle has been consumed and dropped - no orphaned tasks");
             }
         }
-        
+
         // CRITICAL: At this point, JoinHandle has been dropped in all code paths:
         // - Phase 1 success: handle awaited and dropped
         // - Phase 1 panic: handle awaited and dropped
@@ -1694,10 +1723,7 @@ impl CircuitBreaker {
         };
 
         let task_count = tasks.len();
-        info!(
-            task_count = task_count,
-            "Stopping all monitoring tasks"
-        );
+        info!(task_count = task_count, "Stopping all monitoring tasks");
 
         for (endpoint, (handle, token)) in tasks {
             debug!("Stopping monitoring task for endpoint: {}", endpoint);
@@ -2190,7 +2216,9 @@ mod tests {
         // Check that the backoff strategy has been incremented
         {
             let health_map = cb.endpoint_health.read().await;
-            let health = health_map.get("test-backoff").expect("test-backoff endpoint should exist");
+            let health = health_map
+                .get("test-backoff")
+                .expect("test-backoff endpoint should exist");
             assert_eq!(health.backoff_strategy.attempt, 1); // First cooldown
         }
 
@@ -2206,7 +2234,9 @@ mod tests {
         // Check that the backoff strategy has been incremented again
         {
             let health_map = cb.endpoint_health.read().await;
-            let health = health_map.get("test-backoff").expect("test-backoff endpoint should exist");
+            let health = health_map
+                .get("test-backoff")
+                .expect("test-backoff endpoint should exist");
             assert_eq!(health.backoff_strategy.attempt, 2); // Exponential increase
         }
     }
@@ -2869,27 +2899,27 @@ mod tests {
         // Test that CancellationToken stops tasks immediately
         let token = CancellationToken::new();
         let token_clone = token.clone();
-        
+
         let start = Instant::now();
-        
+
         // Spawn a task that waits for cancellation
         let task = tokio::spawn(async move {
             token_clone.cancelled().await;
         });
-        
+
         // Give task time to start waiting
         sleep(Duration::from_millis(10)).await;
-        
+
         // Cancel the token
         let cancel_time = Instant::now();
         token.cancel();
-        
+
         // Task should complete immediately
         let result = tokio::time::timeout(Duration::from_millis(50), task).await;
         let completion_time = Instant::now();
-        
+
         assert!(result.is_ok(), "Task should complete within 50ms");
-        
+
         // The completion should be fast
         let elapsed = completion_time.duration_since(cancel_time);
         assert!(
@@ -2897,7 +2927,7 @@ mod tests {
             "Task should terminate immediately (within 5ms), but took {:?}",
             elapsed
         );
-        
+
         // Verify token state
         assert!(token.is_cancelled());
     }
@@ -2906,7 +2936,7 @@ mod tests {
     async fn test_cancellation_token_multiple_waiters() {
         // Test that all waiting tasks are woken immediately
         let token = CancellationToken::new();
-        
+
         // Spawn multiple tasks waiting for cancellation
         let mut tasks = Vec::new();
         for _ in 0..5 {
@@ -2915,20 +2945,20 @@ mod tests {
                 token_clone.cancelled().await;
             }));
         }
-        
+
         // Give tasks time to start waiting
         sleep(Duration::from_millis(10)).await;
-        
+
         // Cancel the token
         let start = Instant::now();
         token.cancel();
-        
+
         // All tasks should complete immediately
         for task in tasks {
             let result = tokio::time::timeout(Duration::from_millis(50), task).await;
             assert!(result.is_ok(), "All tasks should complete within 50ms");
         }
-        
+
         let elapsed = start.elapsed();
         assert!(
             elapsed < Duration::from_millis(10),
@@ -2941,16 +2971,16 @@ mod tests {
     async fn test_cancellation_token_already_cancelled() {
         // Test fast path when token is already cancelled
         let token = CancellationToken::new();
-        
+
         // Cancel before waiting
         token.cancel();
         assert!(token.is_cancelled());
-        
+
         // Should return immediately without waiting for notification
         let start = Instant::now();
         token.cancelled().await;
         let elapsed = start.elapsed();
-        
+
         // Should be instant (sub-millisecond)
         assert!(
             elapsed < Duration::from_millis(1),
@@ -2964,15 +2994,15 @@ mod tests {
         // Test that waiting tasks consume zero CPU in idle state
         let token = CancellationToken::new();
         let token_clone = token.clone();
-        
+
         // Spawn a task that waits for cancellation
         let task = tokio::spawn(async move {
             token_clone.cancelled().await;
         });
-        
+
         // Let the task wait for a bit (simulating idle state)
         sleep(Duration::from_millis(100)).await;
-        
+
         // Cancel and verify task completes
         token.cancel();
         let result = tokio::time::timeout(Duration::from_millis(50), task).await;
@@ -3028,7 +3058,8 @@ mod tests {
 
         // Final verification: attempt should be exactly MAX_ATTEMPT after 100 iterations
         assert_eq!(
-            strategy.attempt, BackoffStrategy::MAX_ATTEMPT,
+            strategy.attempt,
+            BackoffStrategy::MAX_ATTEMPT,
             "Attempt should be capped at {} after many retries",
             BackoffStrategy::MAX_ATTEMPT
         );
@@ -3122,21 +3153,23 @@ mod tests {
             let handle = tokio::spawn(async move {
                 for endpoint_id in 0..num_endpoints {
                     let endpoint = format!("endpoint-{}", endpoint_id);
-                    
+
                     // Simulate concurrent access patterns:
                     // - Record success (triggers metric registration + update)
                     // - Record failure (triggers metric registration + update)
                     // - Check availability (may trigger metric registration)
-                    
+
                     if task_id % 3 == 0 {
                         cb_clone.record_success(&endpoint).await;
                     } else if task_id % 3 == 1 {
                         cb_clone.record_failure(&endpoint).await;
                     } else {
                         let _ = cb_clone.is_available(&endpoint).await;
-                        cb_clone.record_success_with_latency(&endpoint, Some(100.0)).await;
+                        cb_clone
+                            .record_success_with_latency(&endpoint, Some(100.0))
+                            .await;
                     }
-                    
+
                     // Small delay to increase chance of interleaving
                     sleep(Duration::from_micros(100)).await;
                 }
@@ -3151,43 +3184,64 @@ mod tests {
 
         // Verify all endpoints have complete metric sets
         let metrics = cb.metrics.read().await;
-        
+
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("endpoint-{}", endpoint_id);
-            
+
             // Each endpoint should have all 7 metrics accessible via labels
             assert!(
-                metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .circuit_state
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing circuit_state metric",
                 endpoint
             );
             assert!(
-                metrics.consecutive_failures.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .consecutive_failures
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing consecutive_failures metric",
                 endpoint
             );
             assert!(
-                metrics.failures_total.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .failures_total
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing failures_total metric",
                 endpoint
             );
             assert!(
-                metrics.probe_latency.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .probe_latency
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing probe_latency metric",
                 endpoint
             );
             assert!(
-                metrics.last_opened.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .last_opened
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing last_opened metric",
                 endpoint
             );
             assert!(
-                metrics.probe_success_ratio.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .probe_success_ratio
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing probe_success_ratio metric",
                 endpoint
             );
             assert!(
-                metrics.health_score.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .health_score
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing health_score metric",
                 endpoint
             );
@@ -3196,31 +3250,34 @@ mod tests {
         // Verify we can gather metrics without panicking
         let registry = cb.get_metrics_registry().await;
         let gathered_metrics = registry.gather();
-        
+
         // Should have metrics for all endpoints
         assert!(!gathered_metrics.is_empty(), "Should have gathered metrics");
-        
+
         // With label-based metrics, we have:
         // - 7 label-based metric families (state, consecutive_failures, failures_total, latency, last_opened, success_ratio, health_score)
         // - 3 global metrics (registration_failures_total, monitoring_task_count, active_tasks)
         // Total: 10 metric families
         let total_gathered = gathered_metrics.len();
-        
+
         // We should have exactly 10 metric families with label-based approach
         assert!(
             total_gathered >= 10,
             "Expected at least 10 metric families (7 label-based + 3 global), got {}",
             total_gathered
         );
-        
+
         // Verify that each endpoint's data is accessible via labels in the metric families
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("endpoint-{}", endpoint_id);
             let metrics = cb.metrics.read().await;
-            
+
             // Verify we can access each endpoint's metrics via labels
             assert!(
-                metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .circuit_state
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Cannot access state metric for endpoint {}",
                 endpoint
             );
@@ -3269,16 +3326,16 @@ mod tests {
     async fn test_shutdown_multiple_concurrent() {
         // Test that multiple concurrent shutdowns work correctly
         let cb = Arc::new(CircuitBreaker::new(3, 60, 50));
-        
+
         let mut join_handles = Vec::new();
-        
+
         // Start multiple tasks that need shutdown, each in its own spawn
         for i in 0..5 {
             let cb_clone = Arc::clone(&cb);
             let handle = tokio::spawn(async move {
                 let token = CancellationToken::new();
                 let token_clone = token.clone();
-                
+
                 let task_handle = tokio::spawn(async move {
                     // Mix of behaviors
                     if i % 2 == 0 {
@@ -3292,20 +3349,20 @@ mod tests {
                         }
                     }
                 });
-                
+
                 cb_clone.shutdown_task(task_handle, token).await;
             });
-            
+
             join_handles.push(handle);
         }
-        
+
         // Wait for all concurrent shutdowns to complete
         let start = Instant::now();
         for handle in join_handles {
             handle.await.expect("Shutdown task should not panic");
         }
         let elapsed = start.elapsed();
-        
+
         // Since shutdowns run concurrently, total time should be close to single longest shutdown
         // Longest is ~7s (Phase 1 + Phase 2), so we allow some margin
         assert!(
@@ -3321,31 +3378,31 @@ mod tests {
         let token = CancellationToken::new();
         let token_clone1 = token.clone();
         let token_clone2 = token.clone();
-        
+
         // Start multiple tasks waiting for cancellation
         let task1 = tokio::spawn(async move {
             token_clone1.cancelled().await;
         });
-        
+
         let task2 = tokio::spawn(async move {
             token_clone2.cancelled().await;
         });
-        
+
         // Give tasks time to start waiting
         sleep(Duration::from_millis(10)).await;
-        
+
         // Call cancel multiple times
         token.cancel();
         token.cancel();
         token.cancel();
-        
+
         // All tasks should complete
         let result1 = tokio::time::timeout(Duration::from_millis(100), task1).await;
         let result2 = tokio::time::timeout(Duration::from_millis(100), task2).await;
-        
+
         assert!(result1.is_ok(), "Task 1 should complete");
         assert!(result2.is_ok(), "Task 2 should complete");
-        
+
         // Token should remain cancelled
         assert!(token.is_cancelled());
     }
@@ -3354,21 +3411,21 @@ mod tests {
     async fn test_cancellation_token_check_before_wait() {
         // Test fast-path: cancelled before any task waits
         let token = CancellationToken::new();
-        
+
         // Cancel immediately
         token.cancel();
-        
+
         // Now create tasks that check cancellation
         let token_clone = token.clone();
         let task = tokio::spawn(async move {
             token_clone.cancelled().await;
         });
-        
+
         // Task should complete immediately due to fast-path
         let start = Instant::now();
         let result = tokio::time::timeout(Duration::from_millis(50), task).await;
         let elapsed = start.elapsed();
-        
+
         assert!(result.is_ok(), "Task should complete within 50ms");
         assert!(
             elapsed < Duration::from_millis(5),
@@ -3381,11 +3438,11 @@ mod tests {
     async fn test_shutdown_task_race_condition() {
         // Test race condition: task completes just as abort is called
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         for _ in 0..10 {
             let token = CancellationToken::new();
             let token_clone = token.clone();
-            
+
             let handle = tokio::spawn(async move {
                 // Task waits close to Phase 1 timeout, then completes
                 sleep(Duration::from_millis(4900)).await;
@@ -3394,7 +3451,7 @@ mod tests {
                     sleep(Duration::from_millis(50)).await;
                 }
             });
-            
+
             // This should handle the race gracefully
             cb.shutdown_task(handle, token).await;
         }
@@ -3404,7 +3461,7 @@ mod tests {
     async fn test_shutdown_task_context_preservation() {
         // Test that shutdown preserves task context and doesn't leak across shutdowns
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         // First shutdown: graceful
         {
             let token = CancellationToken::new();
@@ -3414,7 +3471,7 @@ mod tests {
             });
             cb.shutdown_task(handle, token).await;
         }
-        
+
         // Second shutdown: timeout and abort
         {
             let token = CancellationToken::new();
@@ -3424,7 +3481,7 @@ mod tests {
             });
             cb.shutdown_task(handle, token).await;
         }
-        
+
         // Third shutdown: panic
         {
             let token = CancellationToken::new();
@@ -3435,7 +3492,7 @@ mod tests {
             });
             cb.shutdown_task(handle, token).await;
         }
-        
+
         // All shutdowns should complete independently without affecting each other
         // If we got here without panicking, the test passes
     }
@@ -3444,30 +3501,30 @@ mod tests {
     async fn test_cancellation_token_notify_semantics() {
         // Test the documented Notify semantics: new waiters after notify_waiters don't get woken
         let token = CancellationToken::new();
-        
+
         // Task 1: Already waiting when cancel is called
         let token_clone1 = token.clone();
         let task1 = tokio::spawn(async move {
             token_clone1.cancelled().await;
         });
-        
+
         // Give task1 time to start waiting
         sleep(Duration::from_millis(50)).await;
-        
+
         // Now cancel - this should wake task1
         token.cancel();
-        
+
         // Task 2: Starts waiting AFTER cancel was called
         // Due to fast-path, this should still work because we check the flag first
         let token_clone2 = token.clone();
         let task2 = tokio::spawn(async move {
             token_clone2.cancelled().await;
         });
-        
+
         // Both tasks should complete
         let result1 = tokio::time::timeout(Duration::from_millis(100), task1).await;
         let result2 = tokio::time::timeout(Duration::from_millis(100), task2).await;
-        
+
         assert!(result1.is_ok(), "Task 1 (already waiting) should complete");
         assert!(
             result2.is_ok(),
@@ -3479,14 +3536,14 @@ mod tests {
     async fn test_deterministic_shutdown_ordering() {
         // Test that shutdown happens in deterministic order: Phase 1 -> Phase 2
         use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-        
+
         let cb = CircuitBreaker::new(3, 60, 50);
         let phase_counter = Arc::new(AtomicU32::new(0));
         let phase_counter_clone = phase_counter.clone();
-        
+
         let token = CancellationToken::new();
         let token_clone = token.clone();
-        
+
         let handle = tokio::spawn(async move {
             // Wait for phase 1 timeout
             tokio::select! {
@@ -3498,15 +3555,15 @@ mod tests {
                 }
             }
         });
-        
+
         let start = Instant::now();
         cb.shutdown_task(handle, token).await;
         let elapsed = start.elapsed();
-        
+
         // Phase counter should have been set (task entered Phase 1)
         let phase = phase_counter.load(AtomicOrdering::SeqCst);
         assert_eq!(phase, 1, "Task should have entered Phase 1");
-        
+
         // Total time should reflect both phases
         assert!(
             elapsed >= Duration::from_secs(5),
@@ -3529,7 +3586,7 @@ mod tests {
         let num_endpoints = 30;
 
         let mut handles = Vec::new();
-        
+
         // Spawn many tasks that hammer the same endpoints simultaneously
         for _ in 0..num_concurrent_tasks {
             let cb_clone = Arc::clone(&cb);
@@ -3538,12 +3595,16 @@ mod tests {
                 for _ in 0..20 {
                     let endpoint_id = rand::random::<usize>() % num_endpoints;
                     let endpoint = format!("load-test-{}", endpoint_id);
-                    
+
                     // Mix of operations
                     match rand::random::<u8>() % 4 {
                         0 => cb_clone.record_success(&endpoint).await,
                         1 => cb_clone.record_failure(&endpoint).await,
-                        2 => cb_clone.record_success_with_latency(&endpoint, Some(50.0)).await,
+                        2 => {
+                            cb_clone
+                                .record_success_with_latency(&endpoint, Some(50.0))
+                                .await
+                        }
                         _ => {
                             let _ = cb_clone.is_available(&endpoint).await;
                         }
@@ -3561,41 +3622,62 @@ mod tests {
         // Verify integrity: all registered endpoints should have complete metric sets
         let metrics = cb.metrics.read().await;
         let health = cb.endpoint_health.read().await;
-        
+
         // For each endpoint in health map, verify it has all metrics accessible via labels
         for endpoint in health.keys() {
             assert!(
-                metrics.circuit_state.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .circuit_state
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing circuit_state after load test",
                 endpoint
             );
             assert!(
-                metrics.consecutive_failures.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .consecutive_failures
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing consecutive_failures after load test",
                 endpoint
             );
             assert!(
-                metrics.failures_total.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .failures_total
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing failures_total after load test",
                 endpoint
             );
             assert!(
-                metrics.probe_latency.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .probe_latency
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing probe_latency after load test",
                 endpoint
             );
             assert!(
-                metrics.last_opened.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .last_opened
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing last_opened after load test",
                 endpoint
             );
             assert!(
-                metrics.probe_success_ratio.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .probe_success_ratio
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing probe_success_ratio after load test",
                 endpoint
             );
             assert!(
-                metrics.health_score.get_metric_with_label_values(&[endpoint]).is_ok(),
+                metrics
+                    .health_score
+                    .get_metric_with_label_values(&[endpoint])
+                    .is_ok(),
                 "Endpoint {} missing health_score after load test",
                 endpoint
             );
@@ -3611,26 +3693,29 @@ mod tests {
     async fn test_registration_failures_metric() {
         // Test that registration_failures_total increments on metric registration errors
         use prometheus::Registry;
-        
+
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         // Record some successes to verify metrics are working
         cb.record_success("test-endpoint-1").await;
         cb.record_success("test-endpoint-2").await;
-        
+
         // Get initial registration failure count (should be 0)
         let initial_failures = {
             let metrics = cb.metrics.read().await;
             metrics.registration_failures_total.get()
         };
-        
-        assert_eq!(initial_failures, 0, "Initial registration failures should be 0");
-        
+
+        assert_eq!(
+            initial_failures, 0,
+            "Initial registration failures should be 0"
+        );
+
         // With label-based metrics, registration failures occur at registry creation time
         // if there's a conflict with existing metric names (not label values)
         // Create a registry with a conflicting metric name
         let pre_registry = Registry::new();
-        
+
         // Pre-register a metric with the same name as our circuit breaker metric
         let _pre_existing = prometheus::register_int_gauge_with_registry!(
             prometheus::Opts::new(
@@ -3638,12 +3723,13 @@ mod tests {
                 "Pre-existing metric to cause conflict"
             ),
             &pre_registry
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         // Create a new CircuitBreakerMetrics with the pre-populated registry
         // This should increment registration_failures_total during initialization
         let metrics = CircuitBreakerMetrics::new(pre_registry);
-        
+
         // Verify that registration_failures_total was incremented during initialization
         let failures_after = metrics.registration_failures_total.get();
         assert!(
@@ -3657,88 +3743,127 @@ mod tests {
     async fn test_monitoring_task_metrics() {
         // Test that monitoring_task_count and active_tasks metrics work correctly
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         // Check initial state
         let (initial_total, initial_active) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
+
         assert_eq!(initial_total, 0, "Initial total tasks should be 0");
         assert_eq!(initial_active, 0, "Initial active tasks should be 0");
-        
+
         // Start first monitoring task
         cb.start_monitoring_task("endpoint-1".to_string(), async {
             sleep(Duration::from_secs(10)).await;
         })
         .await
         .expect("Should start task 1");
-        
+
         // Give task time to start
         sleep(Duration::from_millis(50)).await;
-        
+
         let (total_1, active_1) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
-        assert_eq!(total_1, 1, "Total tasks should be 1 after starting first task");
-        assert_eq!(active_1, 1, "Active tasks should be 1 after starting first task");
-        
+
+        assert_eq!(
+            total_1, 1,
+            "Total tasks should be 1 after starting first task"
+        );
+        assert_eq!(
+            active_1, 1,
+            "Active tasks should be 1 after starting first task"
+        );
+
         // Start second monitoring task
         cb.start_monitoring_task("endpoint-2".to_string(), async {
             sleep(Duration::from_secs(10)).await;
         })
         .await
         .expect("Should start task 2");
-        
+
         // Give task time to start
         sleep(Duration::from_millis(50)).await;
-        
+
         let (total_2, active_2) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
-        assert_eq!(total_2, 2, "Total tasks should be 2 after starting second task");
-        assert_eq!(active_2, 2, "Active tasks should be 2 after starting second task");
-        
+
+        assert_eq!(
+            total_2, 2,
+            "Total tasks should be 2 after starting second task"
+        );
+        assert_eq!(
+            active_2, 2,
+            "Active tasks should be 2 after starting second task"
+        );
+
         // Stop one task
         cb.stop_monitoring_task("endpoint-1")
             .await
             .expect("Should stop task 1");
-        
+
         // Give task time to complete shutdown
         sleep(Duration::from_millis(100)).await;
-        
+
         let (total_3, active_3) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
-        assert_eq!(total_3, 2, "Total tasks should remain 2 (counter doesn't decrement)");
-        assert_eq!(active_3, 1, "Active tasks should be 1 after stopping one task");
-        
+
+        assert_eq!(
+            total_3, 2,
+            "Total tasks should remain 2 (counter doesn't decrement)"
+        );
+        assert_eq!(
+            active_3, 1,
+            "Active tasks should be 1 after stopping one task"
+        );
+
         // Stop all remaining tasks
         cb.stop_all_monitoring_tasks().await;
-        
+
         // Give tasks time to complete shutdown
         sleep(Duration::from_millis(100)).await;
-        
+
         let (total_final, active_final) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
-        assert_eq!(total_final, 2, "Total tasks should remain 2 (cumulative counter)");
-        assert_eq!(active_final, 0, "Active tasks should be 0 after stopping all tasks");
+
+        assert_eq!(
+            total_final, 2,
+            "Total tasks should remain 2 (cumulative counter)"
+        );
+        assert_eq!(
+            active_final, 0,
+            "Active tasks should be 0 after stopping all tasks"
+        );
     }
 
     #[tokio::test]
     async fn test_task_metrics_on_task_completion() {
         // Test that active_tasks decrements when a task completes naturally
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         // Start a short-lived task
         cb.start_monitoring_task("short-task".to_string(), async {
             sleep(Duration::from_millis(100)).await;
@@ -3746,70 +3871,82 @@ mod tests {
         })
         .await
         .expect("Should start task");
-        
+
         // Give task time to start
         sleep(Duration::from_millis(50)).await;
-        
+
         let active_during = {
             let metrics = cb.metrics.read().await;
             metrics.active_tasks.get()
         };
-        
-        assert_eq!(active_during, 1, "Active tasks should be 1 while task is running");
-        
+
+        assert_eq!(
+            active_during, 1,
+            "Active tasks should be 1 while task is running"
+        );
+
         // Wait for task to complete
         sleep(Duration::from_millis(200)).await;
-        
+
         let active_after = {
             let metrics = cb.metrics.read().await;
             metrics.active_tasks.get()
         };
-        
-        assert_eq!(active_after, 0, "Active tasks should be 0 after task completes");
+
+        assert_eq!(
+            active_after, 0,
+            "Active tasks should be 0 after task completes"
+        );
     }
 
     #[tokio::test]
     async fn test_task_hot_swap_metrics() {
         // Test that hot-swapping a task (replacing an existing task) handles metrics correctly
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         // Start first task
         cb.start_monitoring_task("endpoint".to_string(), async {
             sleep(Duration::from_secs(10)).await;
         })
         .await
         .expect("Should start first task");
-        
+
         sleep(Duration::from_millis(50)).await;
-        
+
         let (total_1, active_1) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
+
         assert_eq!(total_1, 1, "Total tasks should be 1");
         assert_eq!(active_1, 1, "Active tasks should be 1");
-        
+
         // Hot-swap: start another task for the same endpoint
         cb.start_monitoring_task("endpoint".to_string(), async {
             sleep(Duration::from_secs(10)).await;
         })
         .await
         .expect("Should start second task (hot-swap)");
-        
+
         // Give old task time to shut down and new task to start
         sleep(Duration::from_millis(200)).await;
-        
+
         let (total_2, active_2) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
+
         // Total should increment (new task started)
         assert_eq!(total_2, 2, "Total tasks should be 2 after hot-swap");
         // Active should still be 1 (old task stopped, new task started)
         assert_eq!(active_2, 1, "Active tasks should be 1 after hot-swap");
-        
+
         // Clean up
         cb.stop_all_monitoring_tasks().await;
         sleep(Duration::from_millis(100)).await;
@@ -3821,7 +3958,7 @@ mod tests {
         // This is a behavioral test - we verify the metrics have correct values
         // when stop_all_monitoring_tasks is called
         let cb = CircuitBreaker::new(3, 60, 50);
-        
+
         // Start multiple tasks
         for i in 0..3 {
             cb.start_monitoring_task(format!("endpoint-{}", i), async move {
@@ -3830,22 +3967,25 @@ mod tests {
             .await
             .expect("Should start task");
         }
-        
+
         sleep(Duration::from_millis(100)).await;
-        
+
         let (total_before, active_before) = {
             let metrics = cb.metrics.read().await;
-            (metrics.monitoring_task_count.get(), metrics.active_tasks.get())
+            (
+                metrics.monitoring_task_count.get(),
+                metrics.active_tasks.get(),
+            )
         };
-        
+
         assert_eq!(total_before, 3, "Should have 3 total tasks");
         assert_eq!(active_before, 3, "Should have 3 active tasks");
-        
+
         // Stop all tasks - this should log the summary
         cb.stop_all_monitoring_tasks().await;
-        
+
         sleep(Duration::from_millis(100)).await;
-        
+
         let (total_after, active_after, failures) = {
             let metrics = cb.metrics.read().await;
             (
@@ -3854,10 +3994,16 @@ mod tests {
                 metrics.registration_failures_total.get(),
             )
         };
-        
+
         assert_eq!(total_after, 3, "Total tasks should remain 3");
-        assert_eq!(active_after, 0, "Active tasks should be 0 after stopping all");
-        assert_eq!(failures, 0, "Should have no registration failures in normal operation");
+        assert_eq!(
+            active_after, 0,
+            "Active tasks should be 0 after stopping all"
+        );
+        assert_eq!(
+            failures, 0,
+            "Should have no registration failures in normal operation"
+        );
     }
 
     // ============================================================================
@@ -3872,33 +4018,31 @@ mod tests {
         //
         // This validates that tokio_util::CancellationToken correctly handles the race
         // where cancellation happens concurrently with waiting tasks.
-        
+
         for iteration in 0..100 {
             let token = CancellationToken::new();
             let token_cancel = token.clone();
             let token_wait = token.clone();
-            
+
             // Spawn cancellation in a separate thread to create true concurrency
             let cancel_handle = tokio::spawn(async move {
                 // Small delay to increase chance of race
                 sleep(Duration::from_micros(10)).await;
                 token_cancel.cancel();
             });
-            
+
             // Main task waits for cancellation
             let wait_handle = tokio::spawn(async move {
                 token_wait.cancelled().await;
             });
-            
+
             // Both should complete within a reasonable time
-            let timeout_result = tokio::time::timeout(
-                Duration::from_millis(100), 
-                async {
-                    cancel_handle.await.expect("Cancel task should complete");
-                    wait_handle.await.expect("Wait task should complete");
-                }
-            ).await;
-            
+            let timeout_result = tokio::time::timeout(Duration::from_millis(100), async {
+                cancel_handle.await.expect("Cancel task should complete");
+                wait_handle.await.expect("Wait task should complete");
+            })
+            .await;
+
             assert!(
                 timeout_result.is_ok(),
                 "Race condition detected at iteration {}: cancelled() did not wake despite cancel() being called",
@@ -3915,11 +4059,11 @@ mod tests {
         // 1. Tasks can choose to ignore cancellation (don't check is_cancelled)
         // 2. The shutdown mechanism handles this gracefully with Phase 2 abort
         // 3. No deadlocks or resource leaks occur
-        
+
         let cb = CircuitBreaker::new(3, 60, 50);
         let token = CancellationToken::new();
         let token_clone = token.clone();
-        
+
         // Task that intentionally ignores the cancellation signal
         let handle = tokio::spawn(async move {
             // This task never checks is_cancelled() or cancelled().await
@@ -3930,11 +4074,11 @@ mod tests {
                 let _ = token_clone.is_cancelled(); // Check but don't act on it
             }
         });
-        
+
         let start = Instant::now();
         cb.shutdown_task(handle, token).await;
         let elapsed = start.elapsed();
-        
+
         // Should complete via Phase 2 abort after Phase 1 timeout
         assert!(
             elapsed >= Duration::from_secs(5),
@@ -3956,17 +4100,17 @@ mod tests {
         // - Leave orphaned tasks
         // - Corrupt internal state
         // - Cause data races in the monitoring_tasks HashMap
-        
+
         let cb = Arc::new(CircuitBreaker::new(3, 60, 50));
         let num_swaps = 20;
         let endpoint = "hot-swap-test".to_string();
-        
+
         // Perform rapid hot-swaps from multiple threads concurrently
         let mut swap_handles = Vec::new();
         for i in 0..num_swaps {
             let cb_clone = Arc::clone(&cb);
             let endpoint_clone = endpoint.clone();
-            
+
             let handle = tokio::spawn(async move {
                 cb_clone
                     .start_monitoring_task(endpoint_clone, async move {
@@ -3976,21 +4120,21 @@ mod tests {
                     .await
                     .expect("Hot-swap should succeed");
             });
-            
+
             swap_handles.push(handle);
-            
+
             // Small delay between swaps to create interleaving
             sleep(Duration::from_micros(100)).await;
         }
-        
+
         // Wait for all hot-swaps to complete
         for handle in swap_handles {
             handle.await.expect("Swap task should complete");
         }
-        
+
         // Give tasks time to settle
         sleep(Duration::from_millis(200)).await;
-        
+
         // Verify only one task exists for the endpoint (no orphans)
         {
             let tasks = cb.monitoring_tasks.read().await;
@@ -4005,10 +4149,10 @@ mod tests {
                 "The remaining task should be for the hot-swap endpoint"
             );
         }
-        
+
         // Clean up
         cb.stop_all_monitoring_tasks().await;
-        
+
         // Verify cleanup
         {
             let tasks = cb.monitoring_tasks.read().await;
@@ -4027,94 +4171,85 @@ mod tests {
         // 4. Stopping all tasks at once
         // 5. Tasks that complete naturally
         // 6. Tasks that are forcibly aborted
-        
+
         let cb = Arc::new(CircuitBreaker::new(3, 60, 50));
-        
+
         // Phase 1: Start many tasks
         for i in 0..10 {
-            cb.start_monitoring_task(
-                format!("leak-test-{}", i),
-                async move {
-                    sleep(Duration::from_secs(100)).await;
-                }
-            )
+            cb.start_monitoring_task(format!("leak-test-{}", i), async move {
+                sleep(Duration::from_secs(100)).await;
+            })
             .await
             .expect("Should start task");
         }
-        
+
         // Verify tasks are registered
         {
             let tasks = cb.monitoring_tasks.read().await;
             assert_eq!(tasks.len(), 10, "Should have 10 tasks");
         }
-        
+
         // Phase 2: Stop half individually
         for i in 0..5 {
             cb.stop_monitoring_task(&format!("leak-test-{}", i))
                 .await
                 .expect("Should stop task");
         }
-        
+
         sleep(Duration::from_millis(200)).await;
-        
+
         // Verify half are gone
         {
             let tasks = cb.monitoring_tasks.read().await;
             assert_eq!(tasks.len(), 5, "Should have 5 tasks remaining");
         }
-        
+
         // Phase 3: Hot-swap some of the remaining tasks
         for i in 5..7 {
-            cb.start_monitoring_task(
-                format!("leak-test-{}", i),
-                async move {
-                    sleep(Duration::from_secs(100)).await;
-                }
-            )
+            cb.start_monitoring_task(format!("leak-test-{}", i), async move {
+                sleep(Duration::from_secs(100)).await;
+            })
             .await
             .expect("Should hot-swap task");
         }
-        
+
         sleep(Duration::from_millis(200)).await;
-        
+
         // Should still have 5 tasks (hot-swap doesn't increase count)
         {
             let tasks = cb.monitoring_tasks.read().await;
             assert_eq!(tasks.len(), 5, "Should still have 5 tasks after hot-swap");
         }
-        
+
         // Phase 4: Stop all remaining
         cb.stop_all_monitoring_tasks().await;
-        
+
         sleep(Duration::from_millis(200)).await;
-        
+
         // Verify complete cleanup - no leaks
         {
             let tasks = cb.monitoring_tasks.read().await;
             assert_eq!(tasks.len(), 0, "All tasks should be cleaned up - no leaks");
         }
-        
+
         // Phase 5: Start new tasks to verify circuit breaker still works
         for i in 0..5 {
-            cb.start_monitoring_task(
-                format!("post-cleanup-{}", i),
-                async move {
-                    sleep(Duration::from_secs(100)).await;
-                }
-            )
+            cb.start_monitoring_task(format!("post-cleanup-{}", i), async move {
+                sleep(Duration::from_secs(100)).await;
+            })
             .await
             .expect("Should start task after cleanup");
         }
-        
+
         {
             let tasks = cb.monitoring_tasks.read().await;
             assert_eq!(tasks.len(), 5, "Should have 5 new tasks");
         }
-        
+
         // Final cleanup
         cb.stop_all_monitoring_tasks().await;
         sleep(Duration::from_millis(200)).await;
-        
+
         {
             let tasks = cb.monitoring_tasks.read().await;
             assert_eq!(tasks.len(), 0, "Final cleanup should leave no tasks");
@@ -4130,83 +4265,108 @@ mod tests {
         // 2. Registration failures are properly counted
         // 3. Partial state (some metrics registered, others not) doesn't occur
         // 4. The system remains stable under high concurrent load
-        
+
         let cb = Arc::new(CircuitBreaker::new(3, 60, 50));
         let num_threads = 10;
         let num_endpoints = 5;
-        
+
         // Spawn many concurrent tasks that all try to register metrics
         let mut handles = Vec::new();
         for thread_id in 0..num_threads {
             let cb_clone = Arc::clone(&cb);
-            
+
             let handle = tokio::spawn(async move {
                 for endpoint_id in 0..num_endpoints {
                     let endpoint = format!("concurrent-reg-{}", endpoint_id);
-                    
+
                     // All threads hammer the same endpoints
                     // The first one to register will succeed, others hit the cached path
                     cb_clone.record_success(&endpoint).await;
                     cb_clone.record_failure(&endpoint).await;
-                    cb_clone.record_success_with_latency(&endpoint, Some(100.0)).await;
-                    
+                    cb_clone
+                        .record_success_with_latency(&endpoint, Some(100.0))
+                        .await;
+
                     // Micro-sleep to create interleaving
                     sleep(Duration::from_micros(thread_id * 10)).await;
                 }
             });
-            
+
             handles.push(handle);
         }
-        
+
         // Wait for all concurrent operations to complete
         for handle in handles {
-            handle.await.expect("Concurrent registration should not panic");
+            handle
+                .await
+                .expect("Concurrent registration should not panic");
         }
-        
+
         // Verify all endpoints have complete metric sets (no partial registration)
         let metrics = cb.metrics.read().await;
-        
+
         for endpoint_id in 0..num_endpoints {
             let endpoint = format!("concurrent-reg-{}", endpoint_id);
-            
+
             // All 7 metrics must be accessible via labels for each endpoint
             assert!(
-                metrics.circuit_state.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .circuit_state
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing circuit_state",
                 endpoint
             );
             assert!(
-                metrics.consecutive_failures.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .consecutive_failures
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing consecutive_failures",
                 endpoint
             );
             assert!(
-                metrics.failures_total.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .failures_total
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing failures_total",
                 endpoint
             );
             assert!(
-                metrics.probe_latency.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .probe_latency
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing probe_latency",
                 endpoint
             );
             assert!(
-                metrics.last_opened.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .last_opened
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing last_opened",
                 endpoint
             );
             assert!(
-                metrics.probe_success_ratio.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .probe_success_ratio
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing probe_success_ratio",
                 endpoint
             );
             assert!(
-                metrics.health_score.get_metric_with_label_values(&[&endpoint]).is_ok(),
+                metrics
+                    .health_score
+                    .get_metric_with_label_values(&[&endpoint])
+                    .is_ok(),
                 "Endpoint {} missing health_score",
                 endpoint
             );
         }
-        
+
         // Registration failures should be 0 (all succeeded with label-based metrics)
         let failures = metrics.registration_failures_total.get();
         assert_eq!(
@@ -4224,10 +4384,10 @@ mod tests {
         // - Tasks waiting before cancel() are woken immediately
         // - Tasks arriving after cancel() see cancellation and return immediately
         // - No task ever gets stuck waiting
-        
+
         for iteration in 0..50 {
             let token = CancellationToken::new();
-            
+
             // Group 1: Tasks that start waiting BEFORE cancel
             let mut early_waiters = Vec::new();
             for _ in 0..5 {
@@ -4236,13 +4396,13 @@ mod tests {
                     token_clone.cancelled().await;
                 }));
             }
-            
+
             // Give early waiters time to enter wait state
             sleep(Duration::from_millis(10)).await;
-            
+
             // Cancel now - should wake early waiters
             token.cancel();
-            
+
             // Group 2: Tasks that start waiting AFTER cancel
             let mut late_arrivals = Vec::new();
             for _ in 0..5 {
@@ -4252,23 +4412,25 @@ mod tests {
                     token_clone.cancelled().await;
                 }));
             }
-            
+
             // All tasks should complete quickly
             for (i, task) in early_waiters.into_iter().enumerate() {
                 let result = tokio::time::timeout(Duration::from_millis(100), task).await;
                 assert!(
                     result.is_ok(),
                     "Early waiter {} did not complete at iteration {}",
-                    i, iteration
+                    i,
+                    iteration
                 );
             }
-            
+
             for (i, task) in late_arrivals.into_iter().enumerate() {
                 let result = tokio::time::timeout(Duration::from_millis(100), task).await;
                 assert!(
                     result.is_ok(),
                     "Late arrival {} did not complete at iteration {}",
-                    i, iteration
+                    i,
+                    iteration
                 );
             }
         }
@@ -4283,13 +4445,13 @@ mod tests {
         // - All tasks wake immediately when cancel() is called
         // - No deadlocks or race conditions
         // - Consistent behavior across iterations
-        
+
         let num_tasks = 100;
-        
+
         for iteration in 0..10 {
             let token = CancellationToken::new();
             let mut tasks = Vec::new();
-            
+
             // Spawn many tasks concurrently
             for _ in 0..num_tasks {
                 let token_clone = token.clone();
@@ -4297,31 +4459,34 @@ mod tests {
                     token_clone.cancelled().await;
                 }));
             }
-            
+
             // Give all tasks time to enter wait state
             sleep(Duration::from_millis(50)).await;
-            
+
             // Cancel and measure wakeup time
             let start = Instant::now();
             token.cancel();
-            
+
             // All tasks should complete quickly
             for (i, task) in tasks.into_iter().enumerate() {
                 let result = tokio::time::timeout(Duration::from_millis(100), task).await;
                 assert!(
                     result.is_ok(),
                     "Task {} did not complete at iteration {}",
-                    i, iteration
+                    i,
+                    iteration
                 );
             }
-            
+
             let elapsed = start.elapsed();
-            
+
             // All tasks should wake quickly even under high load
             assert!(
                 elapsed < Duration::from_millis(50),
                 "All {} tasks should wake quickly, took {:?} at iteration {}",
-                num_tasks, elapsed, iteration
+                num_tasks,
+                elapsed,
+                iteration
             );
         }
     }
@@ -4334,120 +4499,159 @@ mod tests {
         // 1. consecutive_failures (Gauge) can increase and decrease
         // 2. failures_total (Counter) only increases, never decreases
         // 3. Both metrics track failures independently
-        
+
         let cb = CircuitBreaker::new(5, 60, 50);
         let endpoint = "test-endpoint";
-        
+
         // Initial state: both metrics should be zero (or not exist yet)
-        
+
         // Record first failure
         cb.record_failure(endpoint).await;
-        
+
         {
             let metrics = cb.metrics.read().await;
-            let consecutive = metrics.consecutive_failures
+            let consecutive = metrics
+                .consecutive_failures
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            let total = metrics.failures_total
+            let total = metrics
+                .failures_total
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            
-            assert_eq!(consecutive, 1, "Consecutive failures should be 1 after first failure");
+
+            assert_eq!(
+                consecutive, 1,
+                "Consecutive failures should be 1 after first failure"
+            );
             assert_eq!(total, 1, "Total failures should be 1 after first failure");
         }
-        
+
         // Record second failure
         cb.record_failure(endpoint).await;
-        
+
         {
             let metrics = cb.metrics.read().await;
-            let consecutive = metrics.consecutive_failures
+            let consecutive = metrics
+                .consecutive_failures
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            let total = metrics.failures_total
+            let total = metrics
+                .failures_total
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            
-            assert_eq!(consecutive, 2, "Consecutive failures should be 2 after second failure");
+
+            assert_eq!(
+                consecutive, 2,
+                "Consecutive failures should be 2 after second failure"
+            );
             assert_eq!(total, 2, "Total failures should be 2 after second failure");
         }
-        
+
         // Record a success - this should reset consecutive failures but not total
         cb.record_success(endpoint).await;
-        
+
         {
             let metrics = cb.metrics.read().await;
-            let consecutive = metrics.consecutive_failures
+            let consecutive = metrics
+                .consecutive_failures
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            let total = metrics.failures_total
+            let total = metrics
+                .failures_total
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            
-            assert_eq!(consecutive, 0, "Consecutive failures should reset to 0 after success");
-            assert_eq!(total, 2, "Total failures should remain 2 (Counter never decreases)");
+
+            assert_eq!(
+                consecutive, 0,
+                "Consecutive failures should reset to 0 after success"
+            );
+            assert_eq!(
+                total, 2,
+                "Total failures should remain 2 (Counter never decreases)"
+            );
         }
-        
+
         // Record another failure
         cb.record_failure(endpoint).await;
-        
+
         {
             let metrics = cb.metrics.read().await;
-            let consecutive = metrics.consecutive_failures
+            let consecutive = metrics
+                .consecutive_failures
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            let total = metrics.failures_total
+            let total = metrics
+                .failures_total
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            
-            assert_eq!(consecutive, 1, "Consecutive failures should be 1 after new failure");
+
+            assert_eq!(
+                consecutive, 1,
+                "Consecutive failures should be 1 after new failure"
+            );
             assert_eq!(total, 3, "Total failures should be 3 (incremented from 2)");
         }
-        
+
         // Record multiple failures and then success to verify gauge can fluctuate
         for _ in 0..3 {
             cb.record_failure(endpoint).await;
         }
-        
+
         {
             let metrics = cb.metrics.read().await;
-            let consecutive = metrics.consecutive_failures
+            let consecutive = metrics
+                .consecutive_failures
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            let total = metrics.failures_total
+            let total = metrics
+                .failures_total
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            
-            assert_eq!(consecutive, 4, "Consecutive failures should be 4 (1 + 3 more failures)");
-            assert_eq!(total, 6, "Total failures should be 6 (accumulated from all previous failures)");
+
+            assert_eq!(
+                consecutive, 4,
+                "Consecutive failures should be 4 (1 + 3 more failures)"
+            );
+            assert_eq!(
+                total, 6,
+                "Total failures should be 6 (accumulated from all previous failures)"
+            );
         }
-        
+
         // Another success should reset consecutive but not total
         cb.record_success(endpoint).await;
-        
+
         {
             let metrics = cb.metrics.read().await;
-            let consecutive = metrics.consecutive_failures
+            let consecutive = metrics
+                .consecutive_failures
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            let total = metrics.failures_total
+            let total = metrics
+                .failures_total
                 .get_metric_with_label_values(&[endpoint])
                 .unwrap()
                 .get();
-            
-            assert_eq!(consecutive, 0, "Consecutive failures should reset to 0 again");
-            assert_eq!(total, 6, "Total failures should remain 6 (Counter only increases)");
+
+            assert_eq!(
+                consecutive, 0,
+                "Consecutive failures should reset to 0 again"
+            );
+            assert_eq!(
+                total, 6,
+                "Total failures should remain 6 (Counter only increases)"
+            );
         }
     }
 }
