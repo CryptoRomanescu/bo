@@ -589,26 +589,45 @@ impl LpLockVerifier {
                             for (idx, maybe_account) in accounts.iter().enumerate() {
                                 if let Some(account) = maybe_account {
                                     // Parse token account to get owner using Pack trait
-                                    if let Ok(token_account) =
-                                        spl_token::state::Account::unpack_from_slice(&account.data)
-                                    {
-                                        let owner_str = token_account.owner.to_string();
-                                        let amount_raw = largest_accounts[idx]
-                                            .amount
-                                            .amount
-                                            .parse::<u128>()
-                                            .unwrap_or(0);
+                                    // Token accounts have a fixed size of 165 bytes
+                                    if account.data.len() < spl_token::state::Account::LEN {
+                                        debug!(
+                                            "Account {} has insufficient data length: {} bytes",
+                                            addresses_to_fetch[idx],
+                                            account.data.len()
+                                        );
+                                        continue;
+                                    }
 
-                                        // Check if owner is a burn address
-                                        if BURN_ADDRESSES.contains(&owner_str.as_str()) {
-                                            debug!(
-                                                "Found {} raw tokens in account {} owned by burn address {}",
-                                                amount_raw, addresses_to_fetch[idx], owner_str
-                                            );
-                                            total_burned_raw += amount_raw;
-                                            if !burn_addresses_with_balance.contains(&owner_str) {
-                                                burn_addresses_with_balance.push(owner_str);
+                                    match spl_token::state::Account::unpack_from_slice(
+                                        &account.data,
+                                    ) {
+                                        Ok(token_account) => {
+                                            let owner_str = token_account.owner.to_string();
+                                            let amount_raw = largest_accounts[idx]
+                                                .amount
+                                                .amount
+                                                .parse::<u128>()
+                                                .unwrap_or(0);
+
+                                            // Check if owner is a burn address
+                                            if BURN_ADDRESSES.contains(&owner_str.as_str()) {
+                                                debug!(
+                                                    "Found {} raw tokens in account {} owned by burn address {}",
+                                                    amount_raw, addresses_to_fetch[idx], owner_str
+                                                );
+                                                total_burned_raw += amount_raw;
+                                                if !burn_addresses_with_balance.contains(&owner_str)
+                                                {
+                                                    burn_addresses_with_balance.push(owner_str);
+                                                }
                                             }
+                                        }
+                                        Err(e) => {
+                                            debug!(
+                                                "Failed to unpack token account {}: {}",
+                                                addresses_to_fetch[idx], e
+                                            );
                                         }
                                     }
                                 }
@@ -717,6 +736,10 @@ impl LpLockVerifier {
     ///
     /// # Returns
     /// Balance as f64 (ui_amount) or 0.0 if account doesn't exist
+    ///
+    /// # Note
+    /// This function is kept for backward compatibility and potential future use.
+    /// Most new code should use `get_token_account_balance_raw` for precise u128 amounts.
     #[allow(dead_code)]
     async fn get_token_account_balance(&self, mint: &str, owner: &str) -> Result<f64> {
         let mint_pubkey = Pubkey::from_str(mint).context("Invalid mint address")?;
@@ -1240,6 +1263,17 @@ impl LpLockVerifier {
 
             if let Some(account) = maybe_account {
                 // Parse token account to get owner using Pack trait
+                // Token accounts have a fixed size of 165 bytes
+                if account.data.len() < spl_token::state::Account::LEN {
+                    debug!(
+                        "Account {} has insufficient data length: {} bytes, treating as unsecured",
+                        account_addr,
+                        account.data.len()
+                    );
+                    unsecured_amount_raw += amount_raw;
+                    continue;
+                }
+
                 match spl_token::state::Account::unpack_from_slice(&account.data) {
                     Ok(token_account) => {
                         let owner_str = token_account.owner.to_string();
@@ -1260,7 +1294,10 @@ impl LpLockVerifier {
                         }
                     }
                     Err(e) => {
-                        debug!("Failed to parse token account {}: {}", account_addr, e);
+                        debug!(
+                            "Failed to parse token account {}: {}, treating as unsecured",
+                            account_addr, e
+                        );
                         // Conservative: treat unparseable accounts as unsecured
                         unsecured_amount_raw += amount_raw;
                     }
