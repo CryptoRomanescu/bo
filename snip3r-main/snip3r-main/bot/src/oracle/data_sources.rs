@@ -1,18 +1,98 @@
 //! Data sources for fetching on-chain and off-chain token information.
 //!
-//! This module handles all external data fetching including RPC calls,
-//! API requests, and metadata retrieval with retry logic and caching.
+//! This module provides production-grade data fetching capabilities for Solana token analysis.
+//! It integrates with multiple data sources including Solana RPC, DEX APIs, and social platforms.
 //!
 //! # Features
 //!
-//! - Real Solana RPC integration with multiple endpoint support
-//! - Automatic retry with exponential backoff
-//! - Rate limiting for API calls
-//! - Response caching with TTL
-//! - Comprehensive error handling and validation
-//! - Support for Raydium, Orca, and Pump.fun liquidity pools
-//! - On-chain holder distribution analysis
-//! - Social activity tracking
+//! ## Real-time On-Chain Data
+//! - **Token Supply**: Fetches supply and decimals from SPL token mint accounts
+//! - **Metadata**: Resolves Metaplex metadata PDAs and fetches JSON metadata
+//! - **Holder Distribution**: Analyzes token account distribution across holders
+//! - **Liquidity Pools**: Detects pools on Raydium, Orca, and Pump.fun
+//! - **Transaction Volume**: Analyzes on-chain transactions for volume metrics
+//! - **Creator Activity**: Tracks creator token holdings and sell transactions
+//!
+//! ## Off-Chain Data Integration
+//! - **CoinGecko**: SOL/USD price data
+//! - **Pump.fun API**: Bonding curve pool information
+//! - **Social Metrics**: Twitter, Telegram, Discord activity tracking
+//!
+//! ## Production Features
+//! - **Multiple RPC Endpoints**: Round-robin load balancing with automatic failover
+//! - **Rate Limiting**: Configurable request throttling for RPC and API calls
+//! - **Caching**: TTL-based caching to reduce redundant requests
+//! - **Retry Logic**: Exponential backoff for transient failures
+//! - **Timeout Protection**: Prevents hanging on slow endpoints
+//! - **Comprehensive Logging**: Structured logging with tracing
+//!
+//! # Architecture
+//!
+//! The module is centered around the [`OracleDataSources`] struct which manages:
+//! 1. Multiple RPC clients for redundancy
+//! 2. HTTP client for external APIs
+//! 3. Rate limiters for request throttling
+//! 4. Cache for frequently accessed data
+//!
+//! # Usage Example
+//!
+//! ```no_run
+//! use h_5n1p3r::oracle::data_sources::OracleDataSources;
+//! use h_5n1p3r::oracle::types::OracleConfig;
+//! use h_5n1p3r::types::PremintCandidate;
+//! use reqwest::Client;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create configuration
+//! let mut config = OracleConfig::default();
+//! config.rpc_retry_attempts = 3;
+//! config.cache_ttl_seconds = 300;
+//! config.rate_limit_requests_per_second = 20;
+//!
+//! // Initialize data sources
+//! let endpoints = vec![
+//!     "https://api.mainnet-beta.solana.com".to_string(),
+//!     "https://solana-api.projectserum.com".to_string(),
+//! ];
+//! let http_client = Client::new();
+//! let data_sources = OracleDataSources::new(endpoints, http_client, config);
+//!
+//! // Fetch token data
+//! let candidate = PremintCandidate {
+//!     mint: "So11111111111111111111111111111111111111112".to_string(),
+//!     creator: "11111111111111111111111111111111".to_string(),
+//!     program: "pump.fun".to_string(),
+//!     slot: 12345,
+//!     timestamp: 1640995200,
+//!     instruction_summary: None,
+//!     is_jito_bundle: Some(false),
+//! };
+//!
+//! let token_data = data_sources.fetch_token_data_with_retries(&candidate).await?;
+//! println!("Token supply: {}", token_data.supply);
+//! println!("Holders: {}", token_data.holder_distribution.len());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Error Handling
+//!
+//! All methods return `Result<T>` with detailed error context using `anyhow`.
+//! Errors are logged appropriately and include context about what operation failed.
+//!
+//! # Performance Considerations
+//!
+//! - **Caching**: Frequently accessed data (token supply, metadata) is cached with TTL
+//! - **Rate Limiting**: Prevents overwhelming external services
+//! - **Parallel Requests**: Multiple independent data fetches can run concurrently
+//! - **Timeouts**: All external calls have configurable timeouts
+//!
+//! # Security
+//!
+//! - All external data is validated before use
+//! - Timeouts prevent resource exhaustion
+//! - Rate limiting prevents abuse
+//! - Error messages sanitized to avoid information leakage
 
 use crate::oracle::types::OracleConfig;
 use crate::oracle::types_old::{
@@ -143,13 +223,15 @@ impl OracleDataSources {
 
         // Create rate limiters
         let rpc_quota = Quota::per_second(
-            NonZeroU32::new(config.rate_limit_requests_per_second).unwrap_or(NonZeroU32::new(20).unwrap())
+            NonZeroU32::new(config.rate_limit_requests_per_second.max(1))
+                .unwrap_or_else(|| NonZeroU32::new(20).unwrap())
         );
         let rpc_rate_limiter = Arc::new(RateLimiter::direct(rpc_quota));
 
         // API rate limiter - typically more restrictive for external APIs
         let api_quota = Quota::per_second(
-            NonZeroU32::new(config.rate_limit_requests_per_second / 2).unwrap_or(NonZeroU32::new(10).unwrap())
+            NonZeroU32::new((config.rate_limit_requests_per_second / 2).max(1))
+                .unwrap_or_else(|| NonZeroU32::new(10).unwrap())
         );
         let api_rate_limiter = Arc::new(RateLimiter::direct(api_quota));
 
@@ -1375,14 +1457,14 @@ impl OracleDataSources {
     pub async fn fetch_sol_price_usd(&self) -> Result<f64> {
         let url = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd";
 
+        // Wait for API rate limiter before retry loop
+        self.wait_for_api_rate_limit().await;
+
         let retry_strategy = ExponentialBackoff::from_millis(500)
             .max_delay(Duration::from_secs(3))
             .take(3);
 
         Retry::spawn(retry_strategy, || async {
-            // Wait for API rate limiter
-            self.wait_for_api_rate_limit().await;
-
             let response = tokio::time::timeout(
                 Duration::from_secs(10),
                 self.http_client.get(url).send(),
