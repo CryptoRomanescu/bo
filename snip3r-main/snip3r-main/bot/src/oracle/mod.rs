@@ -8,10 +8,12 @@ pub mod circuit_breaker; // Advanced circuit breaker for endpoint health
 pub mod data_sources; // For MarketRegimeDetector
 pub mod decision_ledger;
 pub mod dex_screener_tracker; // DEX Screener Trending Integration
+pub mod early_pump_cache; // TTL Cache for Early Pump Analysis Results
 pub mod early_pump_detector; // Ultra-Fast Early Pump Detection Engine (<100s decisions)
 pub mod ensemble; // Quantum Ensemble Oracle System
 pub mod feature_engineering; // ML Feature Engineering Framework
 pub mod graph_analyzer;
+pub mod holder_growth_analyzer; // Universe-Class Real-time Holder Growth Analysis
 pub mod intelligence; // Multi-Modal Intelligence Layer (Sentiment Analysis)
 pub mod lp_lock_verifier; // Universe-Class LP Lock and Burn Verifier
 pub mod market_regime_detector; // Pillar III
