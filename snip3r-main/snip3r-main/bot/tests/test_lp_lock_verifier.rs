@@ -611,12 +611,12 @@ fn test_secured_address_detection() {
     let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
     let verifier = LpLockVerifier::new(config, rpc);
 
-    // Test burn addresses
-    assert!(verifier.is_address_secured("11111111111111111111111111111111"));
-    assert!(verifier.is_address_secured("1nc1nerator11111111111111111111111111111111"));
+    // Test burn addresses (using literal addresses for test clarity)
+    assert!(verifier.is_address_secured("11111111111111111111111111111111")); // System Program
+    assert!(verifier.is_address_secured("1nc1nerator11111111111111111111111111111111")); // Incinerator
     
     // Test lock programs
-    assert!(verifier.is_address_secured("LocktDzaV1W2Bm9DeZeiyz4J9zs4fRqNiYqQyracRXw"));
+    assert!(verifier.is_address_secured("LocktDzaV1W2Bm9DeZeiyz4J9zs4fRqNiYqQyracRXw")); // Streamflow
     
     // Test DEX programs
     assert!(verifier.is_address_secured("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")); // Raydium
@@ -625,7 +625,7 @@ fn test_secured_address_detection() {
     // Test farm programs
     assert!(verifier.is_address_secured("EhhTKczWMGQt46ynNeRX1WfeagwwJd7ufHvCDjRxjo5Q")); // Raydium Farm
     
-    // Test unsecured address
+    // Test unsecured address (random user wallet)
     assert!(!verifier.is_address_secured("SomeRandomUserWalletAddress1234567890ABC"));
 }
 
@@ -747,9 +747,9 @@ fn test_config_customization() {
         percentage_locked: 85,
     };
     
-    // With 90% min, 85% locked should not be Low (should be Medium or lower)
+    // With 90% min threshold, 85% locked should be Medium or worse (not Low/Minimal)
     let risk = verifier.calculate_risk_level(&locked_85);
-    assert!(risk >= RiskLevel::Medium);
+    assert!(risk >= RiskLevel::Medium, "Expected Medium or worse risk, got {:?}", risk);
 }
 
 #[test]

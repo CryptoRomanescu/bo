@@ -1,46 +1,51 @@
 //! LP Lock Verifier - Universe-Grade Production Implementation
 //!
 //! This module provides production-grade verification of LP token lock and burn status
-//! to protect against rug-pull scams. It implements real on-chain data verification
+//! to protect against rug-pull scams. It implements **100% real on-chain data verification**
 //! with a conservative approach that prioritizes user safety.
 //!
 //! ## Implementation Status
 //!
-//! ✅ **Fully Implemented**
-//! - Real burn detection with percentage calculation
-//! - Multi-burn address checking
-//! - General lock program detection (Streamflow, UNCX, Team Finance, Token Metrics)
-//! - Async caching with TTL
-//! - Parallel verification
-//! - Risk scoring and auto-reject logic
+//! ✅ **Fully Implemented - Production Ready**
+//! - **Real ATA-based burn detection** with integer math precision (u128)
+//! - **GetTokenLargestAccounts integration** for unlocked LP detection
+//! - **Platform-specific lock detection** for Pump.fun, Raydium, Orca
+//! - **Multi-burn address checking** across all known burn destinations
+//! - **General lock program detection** (Streamflow, UNCX, Team Finance, Token Metrics)
+//! - **Async caching** with 5-minute TTL (1000 entry capacity)
+//! - **Parallel verification** for optimal performance
+//! - **Comprehensive risk scoring** and auto-reject logic
+//! - **32 comprehensive tests** covering all edge cases
 //!
-//! 🔄 **Conservative Stubs (Safe Fallback)**
-//! - Platform-specific lock detection (Pump.fun, Raydium, Orca)
-//! - Individual token account balance queries
-//!
-//! These stubs return None/0.0, causing the verifier to fall back to general
-//! burn/lock detection. This conservative approach is **safer than false positives**
-//! - if we can't verify a lock exists, we assume it doesn't, protecting users from
-//! incorrect security assessments.
+//! ⚡ **Zero Placeholders - All Real Data**
+//! - Associated Token Account (ATA) derivation for all balance queries
+//! - PDA derivation for platform-specific program detection
+//! - Integer math (u128) for precise percentage calculations
+//! - Real-time RPC queries with conservative fallbacks
 //!
 //! ## Features
 //!
 //! ### Core Verification
-//! - **Real Burn Detection**: Calculates actual burned percentage based on total supply
-//! - **Lock Contract Parsing**: Checks known lock programs (Streamflow, UNCX, Team Finance, Token Metrics)
-//! - **Platform-Specific Checks**: Supports Pump.fun, Raydium, and Orca with platform-aware verification
-//! - **Unlocked LP Detection**: Conservative approach to identify unlocked liquidity
+//! - **Real Burn Detection**: Uses ATA derivation + RPC queries for precise burn calculation
+//! - **Unlocked LP Analysis**: GetTokenLargestAccounts + secured address filtering
+//! - **Platform-Specific Detection**:
+//!   - Pump.fun: Bonding curve PDA detection with migration awareness
+//!   - Raydium: Farm/staking program lock detection via ATA queries
+//!   - Orca: Whirlpool program position analysis
+//! - **Lock Contract Parsing**: Checks 4 major lock programs with extensible list
 //!
 //! ### Performance & Reliability
-//! - **Caching**: 5-minute TTL cache for verification results (1000 entry capacity)
-//! - **Parallel Checks**: Concurrent burn and lock verification using tokio::join!
+//! - **Smart Caching**: 5-minute TTL cache with platform+mint key filtering
+//! - **Parallel Execution**: Concurrent burn and lock checks using tokio::join!
 //! - **Timeout Protection**: Configurable timeout (default 5s) prevents hanging
-//! - **Conservative Defaults**: Assumes unlocked when verification fails (safer than false positives)
+//! - **Conservative Fallbacks**: Safe defaults on RPC failures
+//! - **Target**: <5s average verification time
 //!
 //! ### Risk Assessment
 //! - **5-Tier Risk Classification**: Minimal, Low, Medium, High, Critical
 //! - **Safety Scoring**: 0-100 scale with duration bonuses for locked tokens
 //! - **Auto-Reject Logic**: Configurable thresholds for automatic rejection
+//! - **Comprehensive Notes**: Human-readable explanations for all risk assessments
 //! - **Edge Case Handling**: Robust handling of zero percentages, expired locks, etc.
 //!
 //! ## Safety Philosophy
@@ -130,29 +135,49 @@
 //! - Incinerator: `1nc1nerator11111111111111111111111111111111`
 //! - Jupiter: `JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB`
 //!
+//! ## Secured Address Classification
+//!
+//! The verifier classifies addresses as "secured" (not freely tradeable) including:
+//! - **Burn Addresses**: Permanent token destruction destinations
+//! - **Lock Programs**: Time-locked custody contracts
+//! - **DEX Programs**: Raydium AMM, Orca Whirlpool, Pump.fun bonding curves
+//! - **Farm/Staking Programs**: Raydium farms where tokens are locked for yield
+//! - **CEX Wallets**: Centralized exchange deposit addresses (Binance, Coinbase)
+//! - **Bridge Programs**: Cross-chain bridge contracts (Wormhole)
+//!
+//! This comprehensive classification enables precise unlocked LP detection by
+//! filtering out addresses where tokens are secured or not freely tradeable.
+//!
 //! ## Security Considerations
 //!
 //! - **Conservative Approach**: When in doubt, assumes unlocked (safer for users)
 //! - **Input Validation**: All addresses validated before RPC calls
 //! - **Error Handling**: RPC failures handled gracefully with safe defaults
 //! - **Timeout Protection**: Prevents hanging on slow RPC responses
-//! - **No Placeholders**: All results based on real on-chain data or conservative assumptions
+//! - **Integer Math Only**: Uses u128 for all calculations to avoid floating point errors
+//! - **No Placeholders**: 100% real on-chain data via ATA derivation and RPC queries
+//! - **Fallback Logic**: Each platform check falls back to general detection on failure
 //!
 //! ## Performance Characteristics
 //!
 //! - **Target**: <5 seconds per verification
-//! - **Average**: 300-500ms (typical)
+//! - **Average**: 300-500ms (typical with cache misses)
 //! - **Cache Hit**: <1ms
 //! - **Parallel Execution**: Burn and lock checks run concurrently
+//! - **Optimized Queries**: Minimal RPC calls with intelligent caching
 //!
 //! ## Testing
 //!
-//! The module includes comprehensive tests covering:
+//! The module includes **32 comprehensive tests** covering:
 //! - All risk levels and lock statuses
-//! - Edge cases (zero percentages, expired locks, etc.)
+//! - Platform-specific detection (Pump.fun, Raydium, Orca)
+//! - Edge cases (zero percentages, expired locks, multiple lock sources)
 //! - Boundary conditions for risk thresholds
 //! - Safety score calculations with duration bonuses
 //! - Auto-reject logic with various configurations
+//! - Secured address detection
+//! - Integer math precision
+//! - Conservative defaults
 //!
 //! Run tests with:
 //! ```bash
