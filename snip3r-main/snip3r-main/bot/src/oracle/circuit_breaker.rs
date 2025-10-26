@@ -10,7 +10,7 @@ use prometheus::{
     IntGaugeVec, Opts, Registry,
 };
 use rand::Rng;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -170,7 +170,7 @@ pub struct EndpointHealth {
     /// Timestamp when cooldown started
     pub cooldown_start: Option<Instant>,
     /// Recent attempt history (success=true, failure=false)
-    pub recent_attempts: Vec<bool>,
+    pub recent_attempts: VecDeque<bool>,
     /// Number of canary requests sent in half-open state
     pub canary_count: u32,
     /// Number of successful canary requests
@@ -184,7 +184,7 @@ pub struct EndpointHealth {
     /// EWMA error rate tracker for adaptive thresholds
     pub ewma_error_rate: EWMA,
     /// Recent latencies in milliseconds for health score calculation
-    pub recent_latencies: Vec<f64>,
+    pub recent_latencies: VecDeque<f64>,
     /// Average latency in milliseconds
     pub avg_latency_ms: f64,
     /// Latency jitter (standard deviation of latencies)
@@ -1726,14 +1726,14 @@ impl EndpointHealth {
             successful_attempts: 0,
             last_failure: None,
             cooldown_start: None,
-            recent_attempts: Vec::new(),
+            recent_attempts: VecDeque::new(),
             canary_count: 0,
             canary_successes: 0,
             adaptive_threshold: 5, // Default, will be updated
             backoff_strategy: BackoffStrategy::new(base_delay_ms, max_delay_ms),
             half_open_start: None,
             ewma_error_rate: EWMA::new(ewma_alpha),
-            recent_latencies: Vec::new(),
+            recent_latencies: VecDeque::new(),
             avg_latency_ms: 0.0,
             latency_jitter_ms: 0.0,
             health_score: 1.0,
@@ -1747,7 +1747,7 @@ impl EndpointHealth {
 
         self.total_attempts += 1;
         self.successful_attempts += 1;
-        self.recent_attempts.push(true);
+        self.recent_attempts.push_back(true);
 
         // Update EWMA error rate (0.0 for success)
         self.ewma_error_rate.update(0.0);
@@ -1759,7 +1759,7 @@ impl EndpointHealth {
 
         // Keep only recent attempts for rolling window
         if self.recent_attempts.len() > 100 {
-            self.recent_attempts.remove(0);
+            self.recent_attempts.pop_front();
         }
 
         self.update_success_rate();
@@ -1772,7 +1772,7 @@ impl EndpointHealth {
         self.last_failure = Some(Instant::now());
 
         self.total_attempts += 1;
-        self.recent_attempts.push(false);
+        self.recent_attempts.push_back(false);
 
         // Update EWMA error rate (1.0 for failure)
         self.ewma_error_rate.update(1.0);
@@ -1784,7 +1784,7 @@ impl EndpointHealth {
 
         // Keep only recent attempts for rolling window
         if self.recent_attempts.len() > 100 {
-            self.recent_attempts.remove(0);
+            self.recent_attempts.pop_front();
         }
 
         self.update_success_rate();
@@ -1793,11 +1793,11 @@ impl EndpointHealth {
 
     /// Record latency measurement
     fn record_latency(&mut self, latency_ms: f64) {
-        self.recent_latencies.push(latency_ms);
+        self.recent_latencies.push_back(latency_ms);
 
         // Keep only recent 50 latencies for calculation
         if self.recent_latencies.len() > 50 {
-            self.recent_latencies.remove(0);
+            self.recent_latencies.pop_front();
         }
 
         self.update_latency_stats();
