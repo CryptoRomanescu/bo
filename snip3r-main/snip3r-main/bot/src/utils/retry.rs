@@ -51,7 +51,6 @@ where
     Fut: std::future::Future<Output = Result<T>>,
 {
     let mut attempt = 0;
-    let mut last_error = None;
     
     loop {
         attempt += 1;
@@ -93,7 +92,6 @@ where
                     e,
                     backoff_ms
                 );
-                last_error = Some(e);
                 sleep(Duration::from_millis(backoff_ms)).await;
             }
         }
