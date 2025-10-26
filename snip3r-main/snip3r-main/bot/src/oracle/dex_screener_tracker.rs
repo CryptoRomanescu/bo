@@ -678,6 +678,102 @@ impl DexScreenerTracker {
         Ok(())
     }
 
+    /// Calculate velocity from position change
+    fn calculate_position_velocity(
+        current_position: &TrendingPosition,
+        previous_position: Option<&TrendingPosition>,
+    ) -> f64 {
+        if let Some(prev) = previous_position {
+            let rank_change = prev.rank as i32 - current_position.rank as i32;
+            let time_diff = (current_position.timestamp - prev.timestamp) as f64 / 60.0; // minutes
+            if time_diff > 0.0 {
+                rank_change as f64 / time_diff
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate price change percentage
+    fn calculate_price_change(position: &TrendingPosition) -> f64 {
+        if position.entry_price > 0.0 {
+            ((position.current_price - position.entry_price) / position.entry_price) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate volume change percentage
+    fn calculate_volume_change(position: &TrendingPosition) -> f64 {
+        if position.entry_volume > 0.0 {
+            ((position.current_volume - position.entry_volume) / position.entry_volume) * 100.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Detect trending event from position changes
+    fn detect_trending_event(
+        position: &TrendingPosition,
+        previous_position: Option<&TrendingPosition>,
+        velocity: f64,
+    ) -> Option<TrendingEvent> {
+        if previous_position.is_none() {
+            // New entry to trending
+            return Some(TrendingEvent::Entry { rank: position.rank });
+        }
+
+        if let Some(prev_rank) = position.previous_rank {
+            // Check for significant rank changes (threshold: 5 ranks)
+            let rank_diff = (prev_rank as i32 - position.rank as i32).abs();
+            if rank_diff >= 5 {
+                if position.rank < prev_rank {
+                    return Some(TrendingEvent::RankUp {
+                        old_rank: prev_rank,
+                        new_rank: position.rank,
+                    });
+                } else {
+                    return Some(TrendingEvent::RankDown {
+                        old_rank: prev_rank,
+                        new_rank: position.rank,
+                    });
+                }
+            }
+
+            // Check for high velocity (threshold: 2.0 ranks/min)
+            if velocity.abs() > 2.0 {
+                return Some(TrendingEvent::HighMomentum { velocity });
+            }
+        }
+
+        None
+    }
+
+    /// Create event record from detected event
+    fn create_event_record(
+        token_address: &str,
+        event: TrendingEvent,
+        position: &TrendingPosition,
+        velocity: f64,
+        price_change_pct: f64,
+        volume_change_pct: f64,
+    ) -> TrendingEventRecord {
+        let duration = position.timestamp.saturating_sub(position.entry_timestamp);
+        
+        TrendingEventRecord {
+            token_address: token_address.to_string(),
+            event,
+            position: position.clone(),
+            duration_secs: duration,
+            velocity,
+            price_change_pct,
+            volume_change_pct,
+            timestamp: position.timestamp,
+        }
+    }
+
     /// Detect and emit trending events
     async fn detect_and_emit_event(
         &self,
@@ -686,65 +782,24 @@ impl DexScreenerTracker {
         previous_position: Option<&TrendingPosition>,
         history: &mut HashMap<String, TrendingHistory>,
     ) {
-        let now = position.timestamp;
-        let duration = now.saturating_sub(position.entry_timestamp);
-        
-        let velocity = if let Some(prev) = previous_position {
-            let rank_change = prev.rank as i32 - position.rank as i32;
-            let time_diff = (now - prev.timestamp) as f64 / 60.0; // minutes
-            if time_diff > 0.0 {
-                rank_change as f64 / time_diff
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
+        // Calculate metrics
+        let velocity = Self::calculate_position_velocity(position, previous_position);
+        let price_change_pct = Self::calculate_price_change(position);
+        let volume_change_pct = Self::calculate_volume_change(position);
 
-        let price_change_pct = ((position.current_price - position.entry_price) 
-            / position.entry_price) * 100.0;
-        let volume_change_pct = ((position.current_volume - position.entry_volume) 
-            / position.entry_volume) * 100.0;
-
-        let event = if previous_position.is_none() {
-            // New entry
-            Some(TrendingEvent::Entry { rank: position.rank })
-        } else if let Some(prev_rank) = position.previous_rank {
-            // Check for significant rank changes
-            let rank_diff = (prev_rank as i32 - position.rank as i32).abs();
-            if rank_diff >= 5 {
-                if position.rank < prev_rank {
-                    Some(TrendingEvent::RankUp {
-                        old_rank: prev_rank,
-                        new_rank: position.rank,
-                    })
-                } else {
-                    Some(TrendingEvent::RankDown {
-                        old_rank: prev_rank,
-                        new_rank: position.rank,
-                    })
-                }
-            } else if velocity.abs() > 2.0 {
-                // High velocity
-                Some(TrendingEvent::HighMomentum { velocity })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // Detect event
+        let event = Self::detect_trending_event(position, previous_position, velocity);
 
         if let Some(event) = event {
-            let event_record = TrendingEventRecord {
-                token_address: token_address.to_string(),
-                event: event.clone(),
-                position: position.clone(),
-                duration_secs: duration,
+            // Create event record
+            let event_record = Self::create_event_record(
+                token_address,
+                event.clone(),
+                position,
                 velocity,
                 price_change_pct,
                 volume_change_pct,
-                timestamp: now,
-            };
+            );
 
             info!(
                 "Trending EVENT: {} - {:?} (rank={}, velocity={:.2}, price_change={:.1}%)",
@@ -911,7 +966,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_tracker_creation() {
-        let config = DexScreenerConfig::default();
+        let mut config = DexScreenerConfig::default();
+        config.enable_tracking = false; // Disable to avoid API calls
         let tracker = DexScreenerTracker::new(config);
         
         let metrics = tracker.get_trending_metrics("test_token").await.unwrap();
@@ -939,5 +995,242 @@ mod tests {
 
         history.add_position(position);
         assert_eq!(history.positions.len(), 1);
+    }
+
+    #[test]
+    fn test_calculate_position_velocity() {
+        let prev = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 30,
+            previous_rank: None,
+            entry_timestamp: 1000,
+            timestamp: 1000,
+            entry_price: 1.0,
+            current_price: 1.0,
+            entry_volume: 10000.0,
+            current_volume: 10000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let current = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 10,
+            previous_rank: Some(30),
+            entry_timestamp: 1000,
+            timestamp: 1060, // 60 seconds later = 1 minute
+            entry_price: 1.0,
+            current_price: 1.5,
+            entry_volume: 10000.0,
+            current_volume: 20000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let velocity = DexScreenerTracker::calculate_position_velocity(&current, Some(&prev));
+        assert_eq!(velocity, 20.0); // Improved 20 ranks in 1 minute
+    }
+
+    #[test]
+    fn test_calculate_price_change() {
+        let position = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 10,
+            previous_rank: None,
+            entry_timestamp: 1000,
+            timestamp: 1060,
+            entry_price: 1.0,
+            current_price: 1.5,
+            entry_volume: 10000.0,
+            current_volume: 20000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let change = DexScreenerTracker::calculate_price_change(&position);
+        assert_eq!(change, 50.0); // 50% increase
+    }
+
+    #[test]
+    fn test_calculate_volume_change() {
+        let position = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 10,
+            previous_rank: None,
+            entry_timestamp: 1000,
+            timestamp: 1060,
+            entry_price: 1.0,
+            current_price: 1.5,
+            entry_volume: 10000.0,
+            current_volume: 30000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let change = DexScreenerTracker::calculate_volume_change(&position);
+        assert_eq!(change, 200.0); // 200% increase
+    }
+
+    #[test]
+    fn test_detect_trending_event_entry() {
+        let position = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 10,
+            previous_rank: None,
+            entry_timestamp: 1000,
+            timestamp: 1000,
+            entry_price: 1.0,
+            current_price: 1.0,
+            entry_volume: 10000.0,
+            current_volume: 10000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let event = DexScreenerTracker::detect_trending_event(&position, None, 0.0);
+        assert_eq!(event, Some(TrendingEvent::Entry { rank: 10 }));
+    }
+
+    #[test]
+    fn test_detect_trending_event_rank_up() {
+        let position = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 10,
+            previous_rank: Some(30), // Improved from 30 to 10
+            entry_timestamp: 1000,
+            timestamp: 1060,
+            entry_price: 1.0,
+            current_price: 1.5,
+            entry_volume: 10000.0,
+            current_volume: 20000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let prev = TrendingPosition {
+            rank: 30,
+            ..position.clone()
+        };
+
+        let event = DexScreenerTracker::detect_trending_event(&position, Some(&prev), 0.0);
+        assert_eq!(
+            event,
+            Some(TrendingEvent::RankUp {
+                old_rank: 30,
+                new_rank: 10
+            })
+        );
+    }
+
+    #[test]
+    fn test_detect_trending_event_high_momentum() {
+        let position = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 15,
+            previous_rank: Some(18), // Small rank change (3 ranks)
+            entry_timestamp: 1000,
+            timestamp: 1060,
+            entry_price: 1.0,
+            current_price: 1.5,
+            entry_volume: 10000.0,
+            current_volume: 20000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let prev = TrendingPosition {
+            rank: 18,
+            ..position.clone()
+        };
+
+        // High velocity (> 2.0) should trigger high momentum event
+        let event = DexScreenerTracker::detect_trending_event(&position, Some(&prev), 5.0);
+        assert_eq!(event, Some(TrendingEvent::HighMomentum { velocity: 5.0 }));
+    }
+
+    #[test]
+    fn test_create_event_record() {
+        let position = TrendingPosition {
+            pair_address: "pair1".to_string(),
+            token_address: "token1".to_string(),
+            rank: 10,
+            previous_rank: None,
+            entry_timestamp: 1000,
+            timestamp: 1300, // 300 seconds later
+            entry_price: 1.0,
+            current_price: 1.5,
+            entry_volume: 10000.0,
+            current_volume: 20000.0,
+            liquidity_usd: 50000.0,
+            market_cap_usd: Some(100000.0),
+        };
+
+        let event = TrendingEvent::Entry { rank: 10 };
+        let record = DexScreenerTracker::create_event_record(
+            "token1",
+            event.clone(),
+            &position,
+            5.0,
+            50.0,
+            100.0,
+        );
+
+        assert_eq!(record.token_address, "token1");
+        assert_eq!(record.event, event);
+        assert_eq!(record.duration_secs, 300);
+        assert_eq!(record.velocity, 5.0);
+        assert_eq!(record.price_change_pct, 50.0);
+        assert_eq!(record.volume_change_pct, 100.0);
+    }
+
+    #[test]
+    fn test_config_new_fields() {
+        let config = DexScreenerConfig::default();
+        
+        // Test new configuration fields
+        assert_eq!(config.max_history_size, 100);
+        assert_eq!(config.rate_limit_per_minute, 20);
+        assert!(config.enable_circuit_breaker);
+        assert_eq!(config.circuit_breaker_failure_threshold, 5);
+        assert_eq!(config.circuit_breaker_cooldown_secs, 60);
+        assert_eq!(config.max_retries, 3);
+        assert!(config.fallback_to_stale_cache);
+        assert_eq!(config.max_stale_cache_age_secs, 60);
+    }
+
+    #[test]
+    fn test_history_size_limit() {
+        let mut history = TrendingHistory::new(5); // Small limit for testing
+        
+        // Add more positions than the limit
+        for i in 0..10 {
+            let position = TrendingPosition {
+                pair_address: "pair1".to_string(),
+                token_address: "token1".to_string(),
+                rank: i as u32,
+                previous_rank: None,
+                entry_timestamp: 1000,
+                timestamp: 1000 + i,
+                entry_price: 1.0,
+                current_price: 1.0,
+                entry_volume: 10000.0,
+                current_volume: 10000.0,
+                liquidity_usd: 50000.0,
+                market_cap_usd: Some(100000.0),
+            };
+            history.add_position(position);
+        }
+
+        // Should only keep the last 5 positions
+        assert_eq!(history.positions.len(), 5);
+        assert_eq!(history.positions.front().unwrap().rank, 5);
+        assert_eq!(history.positions.back().unwrap().rank, 9);
     }
 }
