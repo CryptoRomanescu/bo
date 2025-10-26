@@ -57,3 +57,66 @@ api_timeout_secs = 5
 enable_nansen = false
 # Enable Birdeye integration (requires API key in environment)
 enable_birdeye = true
+
+[dex_screener]
+# DEX Screener trending tracking configuration
+# API key for higher rate limits (optional - set via DEX_SCREENER_API_KEY environment variable)
+# Get your API key from https://dexscreener.com/
+# api_key will be read from environment variable if set
+
+# Base URL for DEX Screener API
+base_url = "https://api.dexscreener.com/latest"
+
+# Polling interval for trending data (seconds)
+# Must be < 4s for real-time event detection requirement
+polling_interval_secs = 3
+
+# Cache duration for trending data (seconds)
+cache_duration_secs = 2
+
+# API request timeout (seconds)
+api_timeout_secs = 2
+
+# Minimum trending rank to trigger events (1-100)
+# Only tokens ranked 1-100 on DEX Screener will be tracked
+min_trending_rank = 100
+
+# Time window for velocity calculation (seconds)
+# Used to calculate rank change rate (velocity)
+velocity_window_secs = 300
+
+# Enable/disable trending tracking
+enable_tracking = true
+
+# Maximum history size per token (positions + events)
+# Controls memory usage - older data is automatically pruned
+max_history_size = 100
+
+# Rate limit: API requests per minute
+# Conservative default to avoid hitting API limits
+# Increase with API key for higher limits
+rate_limit_per_minute = 20
+
+# Enable circuit breaker for API failures
+# Automatically stops making requests when API is unhealthy
+enable_circuit_breaker = true
+
+# Circuit breaker failure threshold
+# Number of consecutive failures before circuit opens
+circuit_breaker_failure_threshold = 5
+
+# Circuit breaker cooldown duration (seconds)
+# Time to wait before retrying after circuit opens
+circuit_breaker_cooldown_secs = 60
+
+# Maximum retries on API failure
+# Number of retry attempts before giving up
+max_retries = 3
+
+# Use stale cache data on API failure
+# When true, falls back to cached data if API is unavailable
+fallback_to_stale_cache = true
+
+# Maximum age of stale cache data to use (seconds)
+# Only use cached data if it's newer than this threshold
+max_stale_cache_age_secs = 60
