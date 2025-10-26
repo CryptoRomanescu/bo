@@ -22,10 +22,12 @@ use crate::oracle::types_old::{
 use crate::types::PremintCandidate;
 use anyhow::{anyhow, Context, Result};
 use chrono::Timelike;
+use governor::{Quota, RateLimiter};
 use reqwest::Client;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::pubkey::Pubkey as SolanaPubkey;
 use std::collections::VecDeque;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -102,6 +104,10 @@ pub struct OracleDataSources {
     current_rpc_index: Arc<Mutex<usize>>,
     /// Cache for frequently accessed data
     cache: DataCache,
+    /// Rate limiter for RPC calls
+    rpc_rate_limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    /// Rate limiter for HTTP API calls
+    api_rate_limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
 }
 
 impl OracleDataSources {
@@ -135,12 +141,26 @@ impl OracleDataSources {
             .map(|endpoint| Arc::new(RpcClient::new(endpoint.clone())))
             .collect();
 
+        // Create rate limiters
+        let rpc_quota = Quota::per_second(
+            NonZeroU32::new(config.rate_limit_requests_per_second).unwrap_or(NonZeroU32::new(20).unwrap())
+        );
+        let rpc_rate_limiter = Arc::new(RateLimiter::direct(rpc_quota));
+
+        // API rate limiter - typically more restrictive for external APIs
+        let api_quota = Quota::per_second(
+            NonZeroU32::new(config.rate_limit_requests_per_second / 2).unwrap_or(NonZeroU32::new(10).unwrap())
+        );
+        let api_rate_limiter = Arc::new(RateLimiter::direct(api_quota));
+
         Self {
             rpc_clients,
             http_client,
             config,
             current_rpc_index: Arc::new(Mutex::new(0)),
             cache: DataCache::new(),
+            rpc_rate_limiter,
+            api_rate_limiter,
         }
     }
 
@@ -152,10 +172,18 @@ impl OracleDataSources {
             return Err(anyhow!("No RPC clients available"));
         }
 
+        // Wait for rate limiter before proceeding
+        self.rpc_rate_limiter.until_ready().await;
+
         let mut index = self.current_rpc_index.lock().await;
         let client = self.rpc_clients[*index].clone();
         *index = (*index + 1) % self.rpc_clients.len();
         Ok(client)
+    }
+
+    /// Wait for API rate limiter before making external API calls.
+    async fn wait_for_api_rate_limit(&self) {
+        self.api_rate_limiter.until_ready().await;
     }
 
     /// Fetch complete token data with retries.
@@ -538,6 +566,9 @@ impl OracleDataSources {
             return Err(anyhow!("Empty metadata URI"));
         }
 
+        // Wait for rate limiter
+        self.wait_for_api_rate_limit().await;
+
         // Add timeout to prevent hanging on slow endpoints
         let response = tokio::time::timeout(
             Duration::from_secs(10),
@@ -863,6 +894,9 @@ impl OracleDataSources {
             debug!("Pump.fun API key not configured, skipping");
             return Ok(None);
         }
+
+        // Wait for API rate limiter
+        self.wait_for_api_rate_limit().await;
 
         // Pump.fun API endpoint
         let api_url = format!(
@@ -1346,6 +1380,9 @@ impl OracleDataSources {
             .take(3);
 
         Retry::spawn(retry_strategy, || async {
+            // Wait for API rate limiter
+            self.wait_for_api_rate_limit().await;
+
             let response = tokio::time::timeout(
                 Duration::from_secs(10),
                 self.http_client.get(url).send(),
