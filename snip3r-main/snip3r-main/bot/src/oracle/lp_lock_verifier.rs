@@ -685,14 +685,18 @@ impl LpLockVerifier {
     ///
     /// This method:
     /// 1. Gets the total supply of the LP token (raw amount + decimals)
-    /// 2. Checks all known burn addresses for token balances via ATA
+    /// 2. Batch-checks all known burn addresses for token balances via getMultipleAccounts
     /// 3. Fetches largest token accounts and checks if their OWNER is a burn address
-    /// 4. Calculates the actual percentage burned using integer math
+    /// 4. Calculates the actual percentage burned using safe integer math
     ///
     /// # Returns
     /// - `Ok(Some(LockStatus::Burned))` if tokens are found in burn addresses
     /// - `Ok(None)` if no burned tokens are detected
     /// - `Err` if RPC calls fail critically
+    ///
+    /// # Performance
+    /// Uses getMultipleAccounts for batch fetching burn address ATAs (reduced RPC calls)
+    #[instrument(skip(self), fields(mint = %mint))]
     ///
     /// # Note
     /// Uses integer math (u128) for precise percentage calculation.
@@ -726,30 +730,63 @@ impl LpLockVerifier {
         let mut total_burned_raw: u128 = 0;
         let mut burn_addresses_with_balance = Vec::new();
 
-        // Step 1: Check each known burn address via ATA
-        for burn_addr in BURN_ADDRESSES {
-            // Get the associated token account balance for this burn address
-            match self
-                .get_token_account_balance_raw(mint, burn_addr, supply_result.decimals)
-                .await
-            {
-                Ok(balance_raw) if balance_raw > 0 => {
-                    debug!(
-                        "Found {} raw tokens in ATA for burn address {}",
-                        balance_raw, burn_addr
-                    );
-                    total_burned_raw = total_burned_raw.saturating_add(balance_raw);
-                    burn_addresses_with_balance.push(burn_addr.to_string());
+        // Step 1: Check all known burn addresses via ATA using getMultipleAccounts for efficiency
+        let burn_atas: Vec<(String, Pubkey)> = BURN_ADDRESSES
+            .iter()
+            .filter_map(|burn_addr| {
+                Pubkey::from_str(burn_addr)
+                    .ok()
+                    .map(|owner_pk| {
+                        let ata = get_associated_token_address(&owner_pk, &mint_pubkey);
+                        (burn_addr.to_string(), ata)
+                    })
+            })
+            .collect();
+
+        // Batch fetch all burn address ATAs
+        let burn_ata_addresses: Vec<Pubkey> = burn_atas.iter().map(|(_, ata)| *ata).collect();
+        
+        match self
+            .rpc_client
+            .get_multiple_accounts(&burn_ata_addresses)
+            .await
+        {
+            Ok(accounts) => {
+                for (idx, maybe_account) in accounts.iter().enumerate() {
+                    if let Some(account) = maybe_account {
+                        // Parse token account data to get balance
+                        if account.data.len() >= spl_token::state::Account::LEN {
+                            match spl_token::state::Account::unpack_from_slice(&account.data) {
+                                Ok(token_account) => {
+                                    let balance_raw = token_account.amount as u128;
+                                    if balance_raw > 0 {
+                                        let burn_addr = &burn_atas[idx].0;
+                                        debug!(
+                                            "Found {} raw tokens in ATA for burn address {}",
+                                            balance_raw, burn_addr
+                                        );
+                                        total_burned_raw = total_burned_raw.saturating_add(balance_raw);
+                                        burn_addresses_with_balance.push(burn_addr.to_string());
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        "Failed to parse token account for burn address {}: {}",
+                                        burn_atas[idx].0, e
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        debug!(
+                            "Burn address {} has no ATA for token {}",
+                            burn_atas[idx].0, mint
+                        );
+                    }
                 }
-                Ok(_) => {
-                    debug!(
-                        "Burn address {} has no ATA balance for token {}",
-                        burn_addr, mint
-                    );
-                }
-                Err(e) => {
-                    debug!("Failed to check burn address ATA {}: {}", burn_addr, e);
-                }
+            }
+            Err(e) => {
+                debug!("Failed to fetch burn address ATAs in batch: {}", e);
             }
         }
 
@@ -988,6 +1025,7 @@ impl LpLockVerifier {
     /// - `Ok(Some(LockStatus::Locked))` if locked tokens are detected
     /// - `Ok(None)` if no locks are found
     /// - `Err` if verification fails critically
+    #[instrument(skip(self), fields(mint = %mint, platform = %platform))]
     async fn check_lock_contract(&self, mint: &str, platform: &str) -> Result<Option<LockStatus>> {
         debug!("Checking lock contracts for {} on {}", mint, platform);
 
