@@ -186,17 +186,24 @@
 //! ```
 
 use anyhow::{Context, Result};
+use governor::{Quota, RateLimiter};
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use spl_associated_token_account::get_associated_token_address;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use thiserror::Error;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
-use tracing::{debug, info, instrument, warn};
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tokio_retry::Retry;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, instrument, warn};
 
 /// Known burn addresses on Solana
 const BURN_ADDRESSES: &[&str] = &[
@@ -239,6 +246,50 @@ const BRIDGE_PROGRAMS: &[&str] = &[
     "worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth", // Wormhole
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // Token program
 ];
+
+/// LP Lock Verifier errors
+#[derive(Error, Debug)]
+pub enum LpVerifierError {
+    /// RPC call failed (transient - should retry)
+    #[error("RPC call failed: {0}")]
+    RpcTransient(String),
+
+    /// Invalid input data (permanent - should not retry)
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    /// Arithmetic overflow or calculation error (permanent)
+    #[error("Arithmetic error: {0}")]
+    ArithmeticError(String),
+
+    /// Timeout occurred (transient - should retry)
+    #[error("Operation timeout: {0}")]
+    Timeout(String),
+
+    /// Rate limit exceeded (transient - should backoff)
+    #[error("Rate limit exceeded")]
+    RateLimitExceeded,
+
+    /// Verification cancelled
+    #[error("Verification cancelled")]
+    Cancelled,
+
+    /// Generic error with context
+    #[error("Verification error: {0}")]
+    Other(#[from] anyhow::Error),
+}
+
+impl LpVerifierError {
+    /// Determine if this error is transient and should be retried
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            LpVerifierError::RpcTransient(_)
+                | LpVerifierError::Timeout(_)
+                | LpVerifierError::RateLimitExceeded
+        )
+    }
+}
 
 /// LP lock status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -331,6 +382,18 @@ pub struct LpLockConfig {
     pub min_lock_duration_days: u64,
     /// Auto-reject threshold percentage (default: 50%)
     pub auto_reject_threshold: u8,
+    /// Maximum concurrent RPC calls (default: 16)
+    pub max_concurrent_rpc: usize,
+    /// Per-RPC timeout in seconds (default: 3)
+    pub rpc_timeout_secs: u64,
+    /// Maximum retry attempts for transient errors (default: 3)
+    pub max_retries: usize,
+    /// Base backoff delay in milliseconds (default: 100)
+    pub backoff_base_ms: u64,
+    /// Maximum backoff delay in seconds (default: 5)
+    pub max_backoff_secs: u64,
+    /// RPC rate limit: requests per second (default: 10)
+    pub rpc_rate_limit: u32,
 }
 
 impl Default for LpLockConfig {
@@ -340,6 +403,12 @@ impl Default for LpLockConfig {
             min_lock_percentage: 80,
             min_lock_duration_days: 180,
             auto_reject_threshold: 50,
+            max_concurrent_rpc: 16,
+            rpc_timeout_secs: 3,
+            max_retries: 3,
+            backoff_base_ms: 100,
+            max_backoff_secs: 5,
+            rpc_rate_limit: 10,
         }
     }
 }
@@ -350,14 +419,24 @@ pub struct LpLockVerifier {
     rpc_client: Arc<RpcClient>,
     /// Cache for lock status results (TTL-based)
     cache: Cache<String, LpVerificationResult>,
+    /// Semaphore to limit concurrent RPC calls
+    rpc_semaphore: Arc<Semaphore>,
+    /// Rate limiter for RPC calls
+    rate_limiter: Arc<RateLimiter<
+        governor::state::direct::NotKeyed,
+        governor::state::InMemoryState,
+        governor::clock::DefaultClock,
+    >>,
+    /// Cancellation token for cooperative shutdown
+    cancellation_token: CancellationToken,
 }
 
 impl LpLockVerifier {
     /// Create a new LP Lock Verifier
     pub fn new(config: LpLockConfig, rpc_client: Arc<RpcClient>) -> Self {
         info!(
-            "Initialized LpLockVerifier with timeout={}s, min_lock={}%, min_duration={}d",
-            config.timeout_secs, config.min_lock_percentage, config.min_lock_duration_days
+            "Initialized LpLockVerifier with timeout={}s, min_lock={}%, min_duration={}d, max_concurrent={}",
+            config.timeout_secs, config.min_lock_percentage, config.min_lock_duration_days, config.max_concurrent_rpc
         );
 
         // Create cache with 5-minute TTL
@@ -366,11 +445,37 @@ impl LpLockVerifier {
             .max_capacity(1000)
             .build();
 
+        // Create semaphore for concurrency control
+        let rpc_semaphore = Arc::new(Semaphore::new(config.max_concurrent_rpc));
+
+        // Create rate limiter (requests per second)
+        let quota = Quota::per_second(
+            NonZeroU32::new(config.rpc_rate_limit).unwrap_or(NonZeroU32::new(10).unwrap()),
+        );
+        let rate_limiter = Arc::new(RateLimiter::direct(quota));
+
+        // Create cancellation token
+        let cancellation_token = CancellationToken::new();
+
         Self {
             config,
             rpc_client,
             cache,
+            rpc_semaphore,
+            rate_limiter,
+            cancellation_token,
         }
+    }
+
+    /// Get a cancellation token for cooperative shutdown
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    /// Shutdown the verifier (cancels all ongoing operations)
+    pub fn shutdown(&self) {
+        info!("Shutting down LP Lock Verifier");
+        self.cancellation_token.cancel();
     }
 
     /// Verify LP lock status for a token
@@ -434,6 +539,94 @@ impl LpLockVerifier {
         self.cache.insert(cache_key, result.clone()).await;
 
         Ok(result)
+    }
+
+    /// Make an RPC call with retry, backoff, rate limiting, and concurrency control
+    ///
+    /// This method implements:
+    /// - Exponential backoff with jitter
+    /// - Retry on transient errors
+    /// - Rate limiting
+    /// - Concurrency control via semaphore
+    /// - Per-call timeout
+    /// - Cancellation support
+    async fn with_rpc_retry<F, Fut, T>(&self, operation: F) -> Result<T, LpVerifierError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, LpVerifierError>>,
+    {
+        // Check if cancelled
+        if self.cancellation_token.is_cancelled() {
+            return Err(LpVerifierError::Cancelled);
+        }
+
+        // Wait for rate limiter
+        self.rate_limiter.until_ready().await;
+
+        // Acquire semaphore permit for concurrency control
+        let _permit = self.rpc_semaphore.acquire().await.map_err(|e| {
+            LpVerifierError::Other(anyhow::anyhow!("Failed to acquire semaphore: {}", e))
+        })?;
+
+        // Set up retry strategy with exponential backoff and jitter
+        let retry_strategy = ExponentialBackoff::from_millis(self.config.backoff_base_ms)
+            .max_delay(Duration::from_secs(self.config.max_backoff_secs))
+            .take(self.config.max_retries)
+            .map(jitter);
+
+        // Retry the operation
+        Retry::spawn(retry_strategy, || async {
+            // Check cancellation before each attempt
+            if self.cancellation_token.is_cancelled() {
+                return Err(LpVerifierError::Cancelled);
+            }
+
+            // Apply per-RPC timeout
+            let rpc_timeout = Duration::from_secs(self.config.rpc_timeout_secs);
+            match timeout(rpc_timeout, operation()).await {
+                Ok(result) => result,
+                Err(_) => Err(LpVerifierError::Timeout(format!(
+                    "RPC call exceeded {}s timeout",
+                    self.config.rpc_timeout_secs
+                ))),
+            }
+        })
+        .await
+    }
+
+    /// Helper to wrap Solana RPC errors into our error type
+    fn map_rpc_error<T>(result: Result<T, solana_client::client_error::ClientError>) -> Result<T, LpVerifierError> {
+        result.map_err(|e| {
+            // Classify error as transient or permanent
+            let error_str = e.to_string();
+            if error_str.contains("429") || error_str.contains("rate limit") {
+                LpVerifierError::RateLimitExceeded
+            } else if error_str.contains("timeout") || error_str.contains("connection") {
+                LpVerifierError::RpcTransient(error_str)
+            } else {
+                LpVerifierError::RpcTransient(error_str)
+            }
+        })
+    }
+
+    /// Calculate percentage with checked arithmetic to prevent overflow
+    ///
+    /// Returns percentage (0-100) or error if overflow occurs
+    fn calculate_percentage(numerator: u128, denominator: u128) -> Result<u8, LpVerifierError> {
+        if denominator == 0 {
+            return Err(LpVerifierError::ArithmeticError(
+                "Division by zero".to_string(),
+            ));
+        }
+
+        // Use checked_mul to prevent overflow
+        let scaled = numerator
+            .checked_mul(100)
+            .ok_or_else(|| LpVerifierError::ArithmeticError("Overflow in percentage calculation".to_string()))?;
+
+        // Safe division (denominator is non-zero)
+        let percentage = (scaled / denominator).min(100) as u8;
+        Ok(percentage)
     }
 
     /// Check LP lock status using parallel checks
@@ -545,7 +738,7 @@ impl LpLockVerifier {
                         "Found {} raw tokens in ATA for burn address {}",
                         balance_raw, burn_addr
                     );
-                    total_burned_raw += balance_raw;
+                    total_burned_raw = total_burned_raw.saturating_add(balance_raw);
                     burn_addresses_with_balance.push(burn_addr.to_string());
                 }
                 Ok(_) => {
@@ -616,7 +809,7 @@ impl LpLockVerifier {
                                                     "Found {} raw tokens in account {} owned by burn address {}",
                                                     amount_raw, addresses_to_fetch[idx], owner_str
                                                 );
-                                                total_burned_raw += amount_raw;
+                                                total_burned_raw = total_burned_raw.saturating_add(amount_raw);
                                                 if !burn_addresses_with_balance.contains(&owner_str)
                                                 {
                                                     burn_addresses_with_balance.push(owner_str);
@@ -649,7 +842,12 @@ impl LpLockVerifier {
 
         // Calculate burned percentage using integer math for precision
         if total_burned_raw > 0 {
-            let percentage_burned = ((total_burned_raw * 100) / total_supply_raw).min(100) as u8;
+            let percentage_burned = Self::calculate_percentage(total_burned_raw, total_supply_raw)
+                .unwrap_or_else(|e| {
+                    error!("Failed to calculate burn percentage: {}", e);
+                    0 // Conservative: assume 0% burned on calculation error
+                });
+            
             info!(
                 "Burn detection (raw): total_burned={}, total_supply={}, burned={}%",
                 total_burned_raw, total_supply_raw, percentage_burned
@@ -1038,8 +1236,12 @@ impl LpLockVerifier {
             Ok(balance) => {
                 let locked_raw = balance.amount.parse::<u128>().unwrap_or(0);
                 if locked_raw > 0 {
-                    // Calculate percentage using integer math (u128)
-                    let percentage_locked = ((locked_raw * 100) / total_raw).min(100) as u8;
+                    // Calculate percentage using safe checked arithmetic
+                    let percentage_locked = Self::calculate_percentage(locked_raw, total_raw)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to calculate Raydium lock percentage: {}", e);
+                            0
+                        });
 
                     info!(
                         "Raydium farm: locked_raw={}, total_raw={}, pct={}%",
@@ -1134,8 +1336,12 @@ impl LpLockVerifier {
             Ok(balance) => {
                 let locked_raw = balance.amount.parse::<u128>().unwrap_or(0);
                 if locked_raw > 0 {
-                    // Calculate percentage using integer math (u128)
-                    let percentage_locked = ((locked_raw * 100) / total_raw).min(100) as u8;
+                    // Calculate percentage using safe checked arithmetic
+                    let percentage_locked = Self::calculate_percentage(locked_raw, total_raw)
+                        .unwrap_or_else(|e| {
+                            error!("Failed to calculate Orca lock percentage: {}", e);
+                            0
+                        });
 
                     info!(
                         "Orca Whirlpool: locked_raw={}, total_raw={}, pct={}%",
@@ -1270,7 +1476,7 @@ impl LpLockVerifier {
                         account_addr,
                         account.data.len()
                     );
-                    unsecured_amount_raw += amount_raw;
+                    unsecured_amount_raw = unsecured_amount_raw.saturating_add(amount_raw);
                     continue;
                 }
 
@@ -1284,13 +1490,13 @@ impl LpLockVerifier {
                                 "Secured: account {} owned by {} (secured): {} raw tokens",
                                 account_addr, owner_str, amount_raw
                             );
-                            secured_amount_raw += amount_raw;
+                            secured_amount_raw = secured_amount_raw.saturating_add(amount_raw);
                         } else {
                             debug!(
                                 "Unsecured: account {} owned by {} (unsecured): {} raw tokens",
                                 account_addr, owner_str, amount_raw
                             );
-                            unsecured_amount_raw += amount_raw;
+                            unsecured_amount_raw = unsecured_amount_raw.saturating_add(amount_raw);
                         }
                     }
                     Err(e) => {
@@ -1299,19 +1505,23 @@ impl LpLockVerifier {
                             account_addr, e
                         );
                         // Conservative: treat unparseable accounts as unsecured
-                        unsecured_amount_raw += amount_raw;
+                        unsecured_amount_raw = unsecured_amount_raw.saturating_add(amount_raw);
                     }
                 }
             } else {
                 debug!("Account {} not found, treating as unsecured", account_addr);
                 // Conservative: treat missing accounts as unsecured
-                unsecured_amount_raw += amount_raw;
+                unsecured_amount_raw = unsecured_amount_raw.saturating_add(amount_raw);
             }
         }
 
-        // Calculate unlocked percentage using integer math
+        // Calculate unlocked percentage using safe checked arithmetic
         let unlocked_percentage = if total_supply_raw > 0 {
-            ((unsecured_amount_raw * 100) / total_supply_raw).min(100) as u8
+            Self::calculate_percentage(unsecured_amount_raw, total_supply_raw)
+                .unwrap_or_else(|e| {
+                    error!("Failed to calculate unlocked percentage: {}", e);
+                    100 // Conservative: assume 100% unlocked on calculation error
+                })
         } else {
             100 // Conservative default
         };

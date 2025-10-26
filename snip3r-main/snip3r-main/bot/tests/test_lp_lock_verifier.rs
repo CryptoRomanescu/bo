@@ -351,6 +351,7 @@ fn test_custom_config() {
         min_lock_percentage: 90,
         min_lock_duration_days: 365,
         auto_reject_threshold: 60,
+        ..Default::default()
     };
     let rpc = Arc::new(RpcClient::new(
         "https://api.mainnet-beta.solana.com".to_string(),
@@ -466,6 +467,7 @@ fn test_auto_reject_high_risk_with_threshold() {
         min_lock_percentage: 80,
         min_lock_duration_days: 180,
         auto_reject_threshold: 60, // Higher threshold
+        ..Default::default()
     };
     let rpc = Arc::new(RpcClient::new(
         "https://api.mainnet-beta.solana.com".to_string(),
@@ -805,6 +807,7 @@ fn test_config_customization() {
         min_lock_percentage: 90,
         min_lock_duration_days: 365,
         auto_reject_threshold: 70,
+        ..Default::default()
     };
     let rpc = Arc::new(RpcClient::new(
         "https://api.mainnet-beta.solana.com".to_string(),
