@@ -20,9 +20,11 @@
 //! # Reference
 //! Based on CryptoLemur 2025 H2 analysis: median hold time for memecoins = 100 seconds
 
+use crate::oracle::early_pump_cache::EarlyPumpCache;
 use crate::oracle::graph_analyzer::{
     GraphAnalyzerConfig, OnChainGraphAnalyzer, WashTradingDetector, WashTradingConfig,
 };
+use crate::oracle::holder_growth_analyzer::{HolderGrowthAnalyzer, HolderGrowthConfig};
 use crate::oracle::lp_lock_verifier::{LpLockConfig, LpLockVerifier, RiskLevel};
 use crate::oracle::smart_money_tracker::{SmartMoneyTracker, SmartWalletTransaction};
 use crate::oracle::supply_concentration_analyzer::{
@@ -148,6 +150,8 @@ pub struct EarlyPumpDetector {
     lp_lock_verifier: Arc<LpLockVerifier>,
     wash_trading_detector: Arc<WashTradingDetector>,
     supply_analyzer: Arc<SupplyConcentrationAnalyzer>,
+    holder_growth_analyzer: Arc<HolderGrowthAnalyzer>,
+    cache: Arc<EarlyPumpCache>,
 }
 
 impl EarlyPumpDetector {
@@ -181,6 +185,18 @@ impl EarlyPumpDetector {
         };
         let supply_analyzer = Arc::new(SupplyConcentrationAnalyzer::new(supply_config, rpc_client.clone()));
         
+        // Create Holder Growth Analyzer with optimized settings
+        let growth_config = HolderGrowthConfig {
+            snapshot_interval_secs: 3,
+            max_analysis_window_secs: 120,
+            timeout_secs: 10,
+            ..Default::default()
+        };
+        let holder_growth_analyzer = Arc::new(HolderGrowthAnalyzer::new(growth_config, rpc_client.clone()));
+        
+        // Create cache with 60s TTL and 1000 entry capacity
+        let cache = Arc::new(EarlyPumpCache::new(1000, 60));
+        
         Self {
             config,
             rpc_client,
@@ -188,6 +204,8 @@ impl EarlyPumpDetector {
             lp_lock_verifier,
             wash_trading_detector,
             supply_analyzer,
+            holder_growth_analyzer,
+            cache,
         }
     }
 
@@ -224,6 +242,18 @@ impl EarlyPumpDetector {
         };
         let supply_analyzer = Arc::new(SupplyConcentrationAnalyzer::new(supply_config, rpc_client.clone()));
         
+        // Create Holder Growth Analyzer with optimized settings
+        let growth_config = HolderGrowthConfig {
+            snapshot_interval_secs: 3,
+            max_analysis_window_secs: 120,
+            timeout_secs: 10,
+            ..Default::default()
+        };
+        let holder_growth_analyzer = Arc::new(HolderGrowthAnalyzer::new(growth_config, rpc_client.clone()));
+        
+        // Create cache with 60s TTL and 1000 entry capacity
+        let cache = Arc::new(EarlyPumpCache::new(1000, 60));
+        
         Self {
             config,
             rpc_client,
@@ -231,6 +261,8 @@ impl EarlyPumpDetector {
             lp_lock_verifier,
             wash_trading_detector,
             supply_analyzer,
+            holder_growth_analyzer,
+            cache,
         }
     }
 
@@ -245,6 +277,12 @@ impl EarlyPumpDetector {
     /// Complete analysis with decision and timing metrics
     #[instrument(skip(self))]
     pub async fn analyze(&self, mint: &str, deploy_timestamp: u64, program: &str) -> Result<EarlyPumpAnalysis> {
+        // Check cache first
+        if let Some(cached_analysis) = self.cache.get(mint).await {
+            info!("Using cached analysis for mint={}", mint);
+            return Ok((*cached_analysis).clone());
+        }
+
         let start_time = Instant::now();
         let detection_timestamp = chrono::Utc::now().timestamp() as u64;
 
@@ -318,7 +356,32 @@ impl EarlyPumpDetector {
             );
         }
 
+        // Cache the result
+        self.cache.set(mint.to_string(), analysis.clone()).await;
+
         Ok(analysis)
+    }
+
+    /// Force refresh analysis for a token (bypasses cache)
+    pub async fn force_refresh(&self, mint: &str, deploy_timestamp: u64, program: &str) -> Result<EarlyPumpAnalysis> {
+        info!("Force refresh requested for mint={}", mint);
+        
+        // Invalidate cache
+        self.cache.force_refresh(mint).await;
+        
+        // Run fresh analysis
+        self.analyze(mint, deploy_timestamp, program).await
+    }
+
+    /// Invalidate cached analysis for a token (call when new transactions detected)
+    pub async fn invalidate_cache(&self, mint: &str) {
+        self.cache.invalidate(mint).await;
+        info!("Invalidated cache for mint={}", mint);
+    }
+
+    /// Get cache metrics
+    pub async fn get_cache_metrics(&self) -> crate::oracle::early_pump_cache::CacheMetricsSnapshot {
+        self.cache.get_metrics().await
     }
 
     /// Run all checks in parallel for maximum speed
@@ -388,10 +451,34 @@ impl EarlyPumpDetector {
             tokio::spawn(async move { Self::check_smart_money_with_tracker(&mint, deploy_timestamp, tracker).await })
         };
 
-        let holder_check = {
+        let holder_check: tokio::task::JoinHandle<Result<(u8, u64)>> = {
             let mint = mint.clone();
-            let client = self.rpc_client.clone();
-            tokio::spawn(async move { Self::check_holder_growth(&mint, client).await })
+            let analyzer = self.holder_growth_analyzer.clone();
+            tokio::spawn(async move { 
+                let start = Instant::now();
+                match analyzer.analyze(&mint, deploy_timestamp, None, None).await {
+                    Ok(result) => {
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        info!(
+                            "Holder growth analysis for {}: holders={}, growth_rate={:.2}, score={}, organic={}, bot_prob={:.2}, anomalies={}, time={}ms",
+                            mint,
+                            result.current_holders,
+                            result.growth_rate,
+                            result.growth_score,
+                            result.is_organic,
+                            result.bot_probability,
+                            result.anomalies.len(),
+                            elapsed
+                        );
+                        Ok((result.growth_score, elapsed))
+                    }
+                    Err(e) => {
+                        warn!("Holder growth analysis failed for {}: {}", mint, e);
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        Ok((50u8, elapsed)) // Fallback score
+                    }
+                }
+            })
         };
 
         // Wait for all checks to complete
@@ -441,7 +528,7 @@ impl EarlyPumpDetector {
         let (wash_trading_risk, wash_time) = Self::check_wash_trading(mint, self.rpc_client.clone(), self.wash_trading_detector.clone()).await?;
         let (smart_money, wallet_count, transactions, smart_time) =
             Self::check_smart_money_with_tracker(mint, deploy_timestamp, self.smart_money_tracker.clone()).await?;
-        let (holder_growth, holder_time) = Self::check_holder_growth(mint, self.rpc_client.clone()).await?;
+        let (holder_growth, holder_time) = self.check_holder_growth_real(mint, deploy_timestamp).await?;
 
         let results = CheckResults {
             supply_concentration,
@@ -673,12 +760,44 @@ impl EarlyPumpDetector {
         Ok((score, elapsed))
     }
 
-    /// Check holder growth rate (higher score = better growth)
+    /// Check holder growth rate with real analyzer (higher score = better growth)
+    async fn check_holder_growth_real(&self, mint: &str, deploy_timestamp: u64) -> Result<(u8, u64)> {
+        let start = Instant::now();
+        debug!("Checking holder growth for {} with real analyzer", mint);
+
+        match self.holder_growth_analyzer.analyze(mint, deploy_timestamp, None, None).await {
+            Ok(result) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                
+                info!(
+                    "Holder growth analysis for {}: holders={}, growth_rate={:.2}, score={}, organic={}, bot_prob={:.2}, anomalies={}, time={}ms",
+                    mint,
+                    result.current_holders,
+                    result.growth_rate,
+                    result.growth_score,
+                    result.is_organic,
+                    result.bot_probability,
+                    result.anomalies.len(),
+                    elapsed
+                );
+                
+                debug!("Holder growth check completed in {}ms", elapsed);
+                Ok((result.growth_score, elapsed))
+            }
+            Err(e) => {
+                warn!("Holder growth analysis failed for {}: {}", mint, e);
+                let elapsed = start.elapsed().as_millis() as u64;
+                Ok((50, elapsed)) // Fallback score
+            }
+        }
+    }
+
+    /// Check holder growth rate (legacy placeholder - kept for backward compatibility)
+    #[allow(dead_code)]
     async fn check_holder_growth(mint: &str, _rpc: Arc<RpcClient>) -> Result<(u8, u64)> {
         let start = Instant::now();
-        debug!("Checking holder growth for {}", mint);
+        debug!("Checking holder growth for {} (legacy)", mint);
 
-        // TODO: Implement real holder growth analysis
         tokio::time::sleep(Duration::from_millis(60)).await;
 
         let score = 70; // Placeholder score
