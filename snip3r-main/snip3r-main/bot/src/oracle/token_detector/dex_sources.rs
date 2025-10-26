@@ -82,10 +82,7 @@ impl PumpFunStream {
             .context("Failed to fetch Pump.fun launches")?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Pump.fun API error: {}",
-                response.status()
-            ));
+            return Err(anyhow::anyhow!("Pump.fun API error: {}", response.status()));
         }
 
         let launches: Vec<PumpFunLaunch> = response
@@ -231,10 +228,7 @@ impl RaydiumStream {
             .context("Failed to fetch Raydium pools")?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Raydium API error: {}",
-                response.status()
-            ));
+            return Err(anyhow::anyhow!("Raydium API error: {}", response.status()));
         }
 
         let pools: Vec<RaydiumPool> = response
@@ -371,10 +365,7 @@ impl JupiterStream {
             .context("Failed to fetch Jupiter tokens")?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Jupiter API error: {}",
-                response.status()
-            ));
+            return Err(anyhow::anyhow!("Jupiter API error: {}", response.status()));
         }
 
         let tokens: Vec<JupiterToken> = response
@@ -530,10 +521,7 @@ impl PumpSwapStream {
             .context("Failed to fetch PumpSwap tokens")?;
 
         if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "PumpSwap API error: {}",
-                response.status()
-            ));
+            return Err(anyhow::anyhow!("PumpSwap API error: {}", response.status()));
         }
 
         let tokens: Vec<PumpSwapToken> = response
@@ -689,11 +677,7 @@ mod tests {
 
     #[test]
     fn test_pump_fun_stream_creation() {
-        let stream = PumpFunStream::new(
-            "https://api.pump.fun/launches".to_string(),
-            None,
-            250,
-        );
+        let stream = PumpFunStream::new("https://api.pump.fun/launches".to_string(), None, 250);
         assert_eq!(stream.source(), DetectionSource::PumpFun);
         assert!(!stream.is_running());
     }
@@ -714,11 +698,7 @@ mod tests {
 
     #[test]
     fn test_pumpswap_stream_creation() {
-        let stream = PumpSwapStream::new(
-            "https://api.pumpswap.io/tokens".to_string(),
-            None,
-            250,
-        );
+        let stream = PumpSwapStream::new("https://api.pumpswap.io/tokens".to_string(), None, 250);
         assert_eq!(stream.source(), DetectionSource::PumpSwap);
         assert!(!stream.is_running());
     }

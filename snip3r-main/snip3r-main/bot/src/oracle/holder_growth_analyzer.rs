@@ -260,7 +260,13 @@ impl HolderGrowthAnalyzer {
                 self.config.min_snapshots
             );
             // Return default analysis with low score
-            return self.create_default_analysis(mint, deploy_timestamp, current_holders, snapshots, start_time);
+            return self.create_default_analysis(
+                mint,
+                deploy_timestamp,
+                current_holders,
+                snapshots,
+                start_time,
+            );
         }
 
         // Analyze growth patterns
@@ -364,7 +370,10 @@ impl HolderGrowthAnalyzer {
         drop(cache);
 
         // No cache - create initial snapshot
-        debug!("No cached snapshots for {}, creating initial snapshot", mint);
+        debug!(
+            "No cached snapshots for {}, creating initial snapshot",
+            mint
+        );
         Ok(Vec::new())
     }
 
@@ -480,7 +489,8 @@ impl HolderGrowthAnalyzer {
 
         // Check if flattening continues to the end
         if let Some(start_idx) = flat_start {
-            let duration = snapshots[snapshots.len() - 1].timestamp - snapshots[start_idx].timestamp;
+            let duration =
+                snapshots[snapshots.len() - 1].timestamp - snapshots[start_idx].timestamp;
             if duration >= self.config.flattening_duration_threshold {
                 anomalies.push(GrowthAnomaly::SuspiciousFlattening {
                     holder_count: snapshots[snapshots.len() - 1].holder_count,
@@ -528,8 +538,8 @@ impl HolderGrowthAnalyzer {
             let curr = &snapshots[i];
             let time_diff = curr.timestamp.saturating_sub(prev.timestamp);
             if time_diff > 0 {
-                let rate = (curr.holder_count as i64 - prev.holder_count as i64) as f64
-                    / time_diff as f64;
+                let rate =
+                    (curr.holder_count as i64 - prev.holder_count as i64) as f64 / time_diff as f64;
                 rates.push(rate);
             }
         }
@@ -539,11 +549,7 @@ impl HolderGrowthAnalyzer {
         }
 
         let mean = rates.iter().sum::<f64>() / rates.len() as f64;
-        let variance = rates
-            .iter()
-            .map(|r| (r - mean).powi(2))
-            .sum::<f64>()
-            / rates.len() as f64;
+        let variance = rates.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / rates.len() as f64;
 
         variance
     }
@@ -553,7 +559,7 @@ impl HolderGrowthAnalyzer {
         // Organic growth typically has moderate variance (not too smooth, not too spiky)
         // This is a heuristic based on the average growth rate
         let avg_rate = self.calculate_growth_rate(snapshots).abs();
-        
+
         // Expected variance is proportional to growth rate
         // For organic growth, variance is typically 20-50% of the mean rate
         avg_rate * 0.3
@@ -577,22 +583,28 @@ impl HolderGrowthAnalyzer {
                         let ratio = growth_rate / avg_rate;
                         // Strong penalty for sudden jumps - base + excess
                         let excess_ratio = (ratio - self.config.sudden_jump_threshold).max(0.0);
-                        bot_score += weights.sudden_jump_base + (excess_ratio * weights.sudden_jump_excess);
+                        bot_score +=
+                            weights.sudden_jump_base + (excess_ratio * weights.sudden_jump_excess);
                     }
                 }
                 GrowthAnomaly::SuspiciousFlattening { duration_secs, .. } => {
                     // Longer flattening = higher bot probability
-                    bot_score += (*duration_secs as f64 / weights.flattening_normalizer) * weights.flattening_weight;
+                    bot_score += (*duration_secs as f64 / weights.flattening_normalizer)
+                        * weights.flattening_weight;
                 }
                 GrowthAnomaly::RapidDrop { drop_rate, .. } => {
                     let avg_rate = self.calculate_growth_rate(snapshots).abs();
                     if avg_rate > 0.0 {
                         let ratio = drop_rate / avg_rate;
                         let excess_ratio = (ratio - self.config.rapid_drop_threshold).max(0.0);
-                        bot_score += weights.rapid_drop_base + (excess_ratio * weights.rapid_drop_excess);
+                        bot_score +=
+                            weights.rapid_drop_base + (excess_ratio * weights.rapid_drop_excess);
                     }
                 }
-                GrowthAnomaly::UnnaturalCurve { variance, expected_variance } => {
+                GrowthAnomaly::UnnaturalCurve {
+                    variance,
+                    expected_variance,
+                } => {
                     if *expected_variance > 0.0 {
                         let ratio = variance / expected_variance;
                         // Lower variance = higher bot probability
@@ -913,11 +925,7 @@ mod tests {
         let bot_prob = analyzer.calculate_bot_probability(&snapshots, &anomalies);
         let is_organic = analyzer.is_growth_organic(&snapshots, &anomalies, bot_prob);
         let score = analyzer.calculate_growth_score(
-            &snapshots,
-            &anomalies,
-            bot_prob,
-            is_organic,
-            0.5, // moderate smart money
+            &snapshots, &anomalies, bot_prob, is_organic, 0.5, // moderate smart money
             0.1, // low wash trading
         );
 
@@ -940,16 +948,15 @@ mod tests {
         let bot_prob = analyzer.calculate_bot_probability(&snapshots, &anomalies);
         let is_organic = analyzer.is_growth_organic(&snapshots, &anomalies, bot_prob);
         let score = analyzer.calculate_growth_score(
-            &snapshots,
-            &anomalies,
-            bot_prob,
-            is_organic,
-            0.1, // low smart money
+            &snapshots, &anomalies, bot_prob, is_organic, 0.1, // low smart money
             0.7, // high wash trading
         );
 
         // Bot-driven growth should score low
-        println!("Bot growth test - score: {}, bot_prob: {:.2}, is_organic: {}", score, bot_prob, is_organic);
+        println!(
+            "Bot growth test - score: {}, bot_prob: {:.2}, is_organic: {}",
+            score, bot_prob, is_organic
+        );
         assert!(score <= 50, "Expected score <= 50, got {}", score);
         assert!(!is_organic);
         assert!(bot_prob > 0.0);

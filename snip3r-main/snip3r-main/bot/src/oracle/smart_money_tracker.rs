@@ -164,7 +164,7 @@ impl SmartMoneyTracker {
             .expect("Failed to create HTTP client");
 
         let mut smart_wallets = HashMap::new();
-        
+
         // Initialize custom smart wallets
         for wallet in &config.custom_smart_wallets {
             smart_wallets.insert(
@@ -248,9 +248,9 @@ impl SmartMoneyTracker {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let detection_end = deploy_timestamp + self.config.detection_window_secs;
-        
+
         let relevant_transactions: Vec<_> = all_transactions
             .into_iter()
             .filter(|tx| {
@@ -303,7 +303,7 @@ impl SmartMoneyTracker {
 
         if unique_wallets >= self.config.min_smart_wallets {
             let total_volume_sol: f64 = transactions.iter().map(|tx| tx.amount_sol).sum();
-            
+
             let time_to_first_buy_secs = transactions
                 .iter()
                 .map(|tx| tx.timestamp.saturating_sub(deploy_timestamp))
@@ -355,10 +355,7 @@ impl SmartMoneyTracker {
             .ok_or_else(|| anyhow!("Nansen API key not configured"))?;
 
         // Nansen API endpoint (placeholder - actual endpoint depends on Nansen's API)
-        let url = format!(
-            "https://api.nansen.ai/v1/token/{}/smart-money",
-            token_mint
-        );
+        let url = format!("https://api.nansen.ai/v1/token/{}/smart-money", token_mint);
 
         let response = self
             .http_client
@@ -369,10 +366,7 @@ impl SmartMoneyTracker {
             .context("Failed to fetch from Nansen API")?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Nansen API request failed: {}",
-                response.status()
-            ));
+            return Err(anyhow!("Nansen API request failed: {}", response.status()));
         }
 
         let data: NansenResponse = response
@@ -421,10 +415,7 @@ impl SmartMoneyTracker {
             .context("Failed to fetch from Birdeye API")?;
 
         if !response.status().is_success() {
-            return Err(anyhow!(
-                "Birdeye API request failed: {}",
-                response.status()
-            ));
+            return Err(anyhow!("Birdeye API request failed: {}", response.status()));
         }
 
         let data: BirdeyeResponse = response
@@ -432,7 +423,9 @@ impl SmartMoneyTracker {
             .await
             .context("Failed to parse Birdeye response")?;
 
-        let transactions = self.filter_smart_wallets(data.to_transactions(token_mint)).await;
+        let transactions = self
+            .filter_smart_wallets(data.to_transactions(token_mint))
+            .await;
 
         // Cache the result
         self.cache_birdeye_response(token_mint, transactions.clone())
@@ -506,10 +499,16 @@ impl SmartMoneyTracker {
     }
 
     /// Cache transactions for a token
-    async fn cache_transactions(&self, token_mint: &str, transactions: Vec<SmartWalletTransaction>) {
+    async fn cache_transactions(
+        &self,
+        token_mint: &str,
+        transactions: Vec<SmartWalletTransaction>,
+    ) {
         let mut cache = self.recent_transactions.write().await;
-        let entry = cache.entry(token_mint.to_string()).or_insert_with(VecDeque::new);
-        
+        let entry = cache
+            .entry(token_mint.to_string())
+            .or_insert_with(VecDeque::new);
+
         for tx in transactions {
             entry.push_back(tx);
         }
@@ -693,7 +692,7 @@ mod tests {
     fn test_calculate_score_with_transactions() {
         let config = SmartMoneyConfig::default();
         let tracker = SmartMoneyTracker::new(config);
-        
+
         let transactions = vec![
             SmartWalletTransaction {
                 wallet: "wallet1".to_string(),

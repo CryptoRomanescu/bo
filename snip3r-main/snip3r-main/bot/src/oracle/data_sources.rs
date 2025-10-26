@@ -96,8 +96,8 @@
 
 use crate::oracle::types::OracleConfig;
 use crate::oracle::types_old::{
-    CreatorHoldings, HolderData, LiquidityPool, Metadata, PoolType, SocialActivity,
-    TokenData, VolumeData,
+    CreatorHoldings, HolderData, LiquidityPool, Metadata, PoolType, SocialActivity, TokenData,
+    VolumeData,
 };
 use crate::types::PremintCandidate;
 use anyhow::{anyhow, Context, Result};
@@ -185,9 +185,21 @@ pub struct OracleDataSources {
     /// Cache for frequently accessed data
     cache: DataCache,
     /// Rate limiter for RPC calls
-    rpc_rate_limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    rpc_rate_limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
     /// Rate limiter for HTTP API calls
-    api_rate_limiter: Arc<RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    api_rate_limiter: Arc<
+        RateLimiter<
+            governor::state::NotKeyed,
+            governor::state::InMemoryState,
+            governor::clock::DefaultClock,
+        >,
+    >,
 }
 
 impl OracleDataSources {
@@ -211,11 +223,7 @@ impl OracleDataSources {
     /// let endpoints = vec!["https://api.mainnet-beta.solana.com".to_string()];
     /// let data_sources = OracleDataSources::new(endpoints, http_client, config);
     /// ```
-    pub fn new(
-        rpc_endpoints: Vec<String>,
-        http_client: Client,
-        config: OracleConfig,
-    ) -> Self {
+    pub fn new(rpc_endpoints: Vec<String>, http_client: Client, config: OracleConfig) -> Self {
         let rpc_clients = rpc_endpoints
             .iter()
             .map(|endpoint| Arc::new(RpcClient::new(endpoint.clone())))
@@ -224,14 +232,14 @@ impl OracleDataSources {
         // Create rate limiters
         let rpc_quota = Quota::per_second(
             NonZeroU32::new(config.rate_limit_requests_per_second.max(1))
-                .unwrap_or_else(|| NonZeroU32::new(20).unwrap())
+                .unwrap_or_else(|| NonZeroU32::new(20).unwrap()),
         );
         let rpc_rate_limiter = Arc::new(RateLimiter::direct(rpc_quota));
 
         // API rate limiter - typically more restrictive for external APIs
         let api_quota = Quota::per_second(
             NonZeroU32::new((config.rate_limit_requests_per_second / 2).max(1))
-                .unwrap_or_else(|| NonZeroU32::new(10).unwrap())
+                .unwrap_or_else(|| NonZeroU32::new(10).unwrap()),
         );
         let api_rate_limiter = Arc::new(RateLimiter::direct(api_quota));
 
@@ -307,10 +315,7 @@ impl OracleDataSources {
         let token_supply = self.fetch_token_supply_cached(candidate, &rpc).await?;
         let (supply, decimals) = token_supply;
 
-        debug!(
-            "Fetched token supply: {} (decimals: {})",
-            supply, decimals
-        );
+        debug!("Fetched token supply: {} (decimals: {})", supply, decimals);
 
         // Fetch metadata URI and content
         let metadata_uri = self
@@ -408,7 +413,10 @@ impl OracleDataSources {
             social_activity,
         };
 
-        debug!("Successfully fetched complete token data for {}", candidate.mint);
+        debug!(
+            "Successfully fetched complete token data for {}",
+            candidate.mint
+        );
         Ok(token_data)
     }
 
@@ -426,7 +434,7 @@ impl OracleDataSources {
 
         // Fetch from RPC if not in cache
         let result = self.fetch_token_supply(candidate, rpc).await?;
-        
+
         // Store in cache
         let ttl = Duration::from_secs(self.config.cache_ttl_seconds);
         self.cache
@@ -454,8 +462,8 @@ impl OracleDataSources {
         debug!("Fetching token supply and decimals from RPC");
 
         // Parse mint address
-        let mint_pubkey = SolanaPubkey::from_str(&candidate.mint)
-            .context("Failed to parse mint address")?;
+        let mint_pubkey =
+            SolanaPubkey::from_str(&candidate.mint).context("Failed to parse mint address")?;
 
         // Fetch mint account data
         match tokio::time::timeout(
@@ -516,21 +524,17 @@ impl OracleDataSources {
     ///
     /// The metadata URI string or an error if not found
     #[instrument(skip(self, rpc), fields(mint = %mint_address))]
-    async fn resolve_metadata_uri(
-        &self,
-        mint_address: &str,
-        rpc: &RpcClient,
-    ) -> Result<String> {
+    async fn resolve_metadata_uri(&self, mint_address: &str, rpc: &RpcClient) -> Result<String> {
         debug!("Resolving metadata URI for mint");
 
         // Parse mint pubkey
-        let mint_pubkey = SolanaPubkey::from_str(mint_address)
-            .context("Failed to parse mint address")?;
+        let mint_pubkey =
+            SolanaPubkey::from_str(mint_address).context("Failed to parse mint address")?;
 
         // Metaplex Token Metadata Program ID
-        let metadata_program_id = SolanaPubkey::from_str(
-            "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
-        ).context("Failed to parse metadata program ID")?;
+        let metadata_program_id =
+            SolanaPubkey::from_str("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s")
+                .context("Failed to parse metadata program ID")?;
 
         // Derive metadata PDA
         // Seeds: ["metadata", metadata_program_id, mint_pubkey]
@@ -539,7 +543,7 @@ impl OracleDataSources {
             metadata_program_id.as_ref(),
             mint_pubkey.as_ref(),
         ];
-        
+
         let (metadata_pda, _bump) = SolanaPubkey::find_program_address(seeds, &metadata_program_id);
 
         debug!("Metadata PDA: {}", metadata_pda);
@@ -562,7 +566,7 @@ impl OracleDataSources {
                 // Try to find and extract URI string
                 // URI typically starts around byte 65 and is length-prefixed
                 let uri = self.extract_uri_from_metadata(&account.data)?;
-                
+
                 debug!("Resolved metadata URI: {}", uri);
                 Ok(uri)
             }
@@ -589,7 +593,7 @@ impl OracleDataSources {
         // - Name (4 + max 32 bytes, variable length)
         // - Symbol (4 + max 10 bytes, variable length)
         // - URI (4 + max 200 bytes, variable length)
-        
+
         if data.len() < 100 {
             return Err(anyhow!("Metadata too short"));
         }
@@ -623,8 +627,7 @@ impl OracleDataSources {
         }
 
         let uri_bytes = &data[offset..offset + uri_len];
-        let uri = String::from_utf8(uri_bytes.to_vec())
-            .context("Failed to parse URI as UTF-8")?;
+        let uri = String::from_utf8(uri_bytes.to_vec()).context("Failed to parse URI as UTF-8")?;
 
         Ok(uri.trim_end_matches('\0').to_string())
     }
@@ -652,13 +655,11 @@ impl OracleDataSources {
         self.wait_for_api_rate_limit().await;
 
         // Add timeout to prevent hanging on slow endpoints
-        let response = tokio::time::timeout(
-            Duration::from_secs(10),
-            self.http_client.get(uri).send(),
-        )
-        .await
-        .context("Metadata fetch timeout")?
-        .context("Failed to fetch metadata")?;
+        let response =
+            tokio::time::timeout(Duration::from_secs(10), self.http_client.get(uri).send())
+                .await
+                .context("Metadata fetch timeout")?
+                .context("Failed to fetch metadata")?;
 
         // Check HTTP status
         if !response.status().is_success() {
@@ -713,23 +714,23 @@ impl OracleDataSources {
         debug!("Fetching token holder distribution from on-chain data");
 
         // Parse mint address
-        let mint_pubkey = SolanaPubkey::from_str(&candidate.mint)
-            .context("Failed to parse mint address")?;
+        let mint_pubkey =
+            SolanaPubkey::from_str(&candidate.mint).context("Failed to parse mint address")?;
 
         // SPL Token Program ID
-        let token_program_id = SolanaPubkey::from_str(
-            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        ).context("Failed to parse token program ID")?;
+        let token_program_id =
+            SolanaPubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+                .context("Failed to parse token program ID")?;
 
         // Fetch token supply for percentage calculation
         let (total_supply, decimals) = self.fetch_token_supply(candidate, rpc).await?;
 
         // Get token accounts for this mint
         // This is a simplified version - in production, use proper filters
+        use solana_account_decoder::UiAccountEncoding;
         use solana_client::rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
         use solana_client::rpc_filter::{Memcmp, RpcFilterType};
         use solana_sdk::commitment_config::CommitmentConfig;
-        use solana_account_decoder::UiAccountEncoding;
 
         let config = RpcProgramAccountsConfig {
             filters: Some(vec![
@@ -779,15 +780,11 @@ impl OracleDataSources {
             }
 
             // Extract owner (bytes 32-64)
-            let owner_bytes: [u8; 32] = account.data[32..64]
-                .try_into()
-                .unwrap_or([0u8; 32]);
+            let owner_bytes: [u8; 32] = account.data[32..64].try_into().unwrap_or([0u8; 32]);
             let owner = SolanaPubkey::new_from_array(owner_bytes);
 
             // Extract amount (bytes 64-72)
-            let amount_bytes: [u8; 8] = account.data[64..72]
-                .try_into()
-                .unwrap_or([0u8; 8]);
+            let amount_bytes: [u8; 8] = account.data[64..72].try_into().unwrap_or([0u8; 8]);
             let amount = u64::from_le_bytes(amount_bytes);
 
             if amount > 0 {
@@ -805,7 +802,7 @@ impl OracleDataSources {
             .map(|(address, balance)| {
                 let percentage = (balance as f64 / total_supply as f64) * 100.0;
                 let is_whale = percentage >= (whale_threshold * 100.0);
-                
+
                 HolderData {
                     address,
                     percentage,
@@ -874,19 +871,19 @@ impl OracleDataSources {
         debug!("Searching for Raydium pools");
 
         // Parse mint address
-        let mint_pubkey = SolanaPubkey::from_str(&candidate.mint)
-            .context("Failed to parse mint address")?;
+        let mint_pubkey =
+            SolanaPubkey::from_str(&candidate.mint).context("Failed to parse mint address")?;
 
         // Raydium AMM Program ID
-        let raydium_program_id = SolanaPubkey::from_str(
-            "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
-        ).context("Failed to parse Raydium program ID")?;
+        let raydium_program_id =
+            SolanaPubkey::from_str("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")
+                .context("Failed to parse Raydium program ID")?;
 
         // Get Raydium pool accounts
+        use solana_account_decoder::UiAccountEncoding;
         use solana_client::rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
         use solana_client::rpc_filter::RpcFilterType;
         use solana_sdk::commitment_config::CommitmentConfig;
-        use solana_account_decoder::UiAccountEncoding;
 
         let config = RpcProgramAccountsConfig {
             filters: Some(vec![
@@ -933,7 +930,8 @@ impl OracleDataSources {
 
             // Extract base mint (offset varies by Raydium version)
             // This is simplified - actual Raydium pool layout requires proper deserialization
-            let has_our_token = account.data
+            let has_our_token = account
+                .data
                 .windows(32)
                 .any(|window| window == mint_pubkey.to_bytes());
 
@@ -981,10 +979,7 @@ impl OracleDataSources {
         self.wait_for_api_rate_limit().await;
 
         // Pump.fun API endpoint
-        let api_url = format!(
-            "https://frontend-api.pump.fun/coins/{}",
-            candidate.mint
-        );
+        let api_url = format!("https://frontend-api.pump.fun/coins/{}", candidate.mint);
 
         // Fetch with timeout
         let response = match tokio::time::timeout(
@@ -1023,13 +1018,9 @@ impl OracleDataSources {
 
         // Extract pool data from response
         // Pump.fun stores liquidity in virtual reserves
-        let virtual_sol_reserves = data["virtual_sol_reserves"]
-            .as_f64()
-            .unwrap_or(0.0) / 1e9; // Convert lamports to SOL
+        let virtual_sol_reserves = data["virtual_sol_reserves"].as_f64().unwrap_or(0.0) / 1e9; // Convert lamports to SOL
 
-        let virtual_token_reserves = data["virtual_token_reserves"]
-            .as_f64()
-            .unwrap_or(0.0);
+        let virtual_token_reserves = data["virtual_token_reserves"].as_f64().unwrap_or(0.0);
 
         if virtual_sol_reserves > 0.0 && virtual_token_reserves > 0.0 {
             debug!(
@@ -1065,18 +1056,17 @@ impl OracleDataSources {
         debug!("Searching for Orca pools");
 
         // Parse mint address
-        let mint_pubkey = SolanaPubkey::from_str(&candidate.mint)
-            .context("Failed to parse mint address")?;
+        let mint_pubkey =
+            SolanaPubkey::from_str(&candidate.mint).context("Failed to parse mint address")?;
 
         // Orca Whirlpool Program ID
-        let orca_program_id = SolanaPubkey::from_str(
-            "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
-        ).context("Failed to parse Orca program ID")?;
+        let orca_program_id = SolanaPubkey::from_str("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc")
+            .context("Failed to parse Orca program ID")?;
 
         // Get Orca pool accounts
+        use solana_account_decoder::UiAccountEncoding;
         use solana_client::rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
         use solana_sdk::commitment_config::CommitmentConfig;
-        use solana_account_decoder::UiAccountEncoding;
 
         let config = RpcProgramAccountsConfig {
             filters: Some(vec![
@@ -1114,7 +1104,8 @@ impl OracleDataSources {
         // Check each pool for our token
         for (pool_pubkey, account) in accounts {
             // Simplified check - look for mint bytes in pool data
-            let has_our_token = account.data
+            let has_our_token = account
+                .data
                 .windows(32)
                 .any(|window| window == mint_pubkey.to_bytes());
 
@@ -1150,12 +1141,12 @@ impl OracleDataSources {
         debug!("Fetching volume data from transaction history");
 
         // Parse mint address
-        let mint_pubkey = SolanaPubkey::from_str(&candidate.mint)
-            .context("Failed to parse mint address")?;
+        let mint_pubkey =
+            SolanaPubkey::from_str(&candidate.mint).context("Failed to parse mint address")?;
 
         // Get recent signatures for the mint account
-        use solana_transaction_status::UiTransactionEncoding;
         use solana_sdk::commitment_config::CommitmentConfig;
+        use solana_transaction_status::UiTransactionEncoding;
 
         let config = Some(solana_client::rpc_config::RpcTransactionConfig {
             encoding: Some(UiTransactionEncoding::Json),
@@ -1193,7 +1184,10 @@ impl OracleDataSources {
         for sig_info in signatures.iter().take(sample_size) {
             // Fetch transaction details
             // Parse signature string to Signature type
-            if let Ok(signature) = sig_info.signature.parse::<solana_sdk::signature::Signature>() {
+            if let Ok(signature) = sig_info
+                .signature
+                .parse::<solana_sdk::signature::Signature>()
+            {
                 if let Ok(Ok(tx)) = tokio::time::timeout(
                     Duration::from_secs(5),
                     rpc.get_transaction_with_config(&signature, config.unwrap()),
@@ -1267,9 +1261,9 @@ impl OracleDataSources {
         debug!("Fetching creator holdings and sell activity");
 
         // Parse addresses
-        let mint_pubkey = SolanaPubkey::from_str(&candidate.mint)
-            .context("Failed to parse mint address")?;
-        
+        let mint_pubkey =
+            SolanaPubkey::from_str(&candidate.mint).context("Failed to parse mint address")?;
+
         let creator_pubkey = SolanaPubkey::from_str(&candidate.creator)
             .context("Failed to parse creator address")?;
 
@@ -1289,9 +1283,8 @@ impl OracleDataSources {
                 Ok(Ok(account)) => {
                     // Parse token amount from account data
                     if account.data.len() >= 72 {
-                        let amount_bytes: [u8; 8] = account.data[64..72]
-                            .try_into()
-                            .unwrap_or([0u8; 8]);
+                        let amount_bytes: [u8; 8] =
+                            account.data[64..72].try_into().unwrap_or([0u8; 8]);
                         u64::from_le_bytes(amount_bytes)
                     } else {
                         0
@@ -1369,14 +1362,13 @@ impl OracleDataSources {
         mint: &SolanaPubkey,
         rpc: &RpcClient,
     ) -> Result<Option<SolanaPubkey>> {
+        use solana_account_decoder::UiAccountEncoding;
         use solana_client::rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig};
         use solana_client::rpc_filter::{Memcmp, RpcFilterType};
         use solana_sdk::commitment_config::CommitmentConfig;
-        use solana_account_decoder::UiAccountEncoding;
 
-        let token_program_id = SolanaPubkey::from_str(
-            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        )?;
+        let token_program_id =
+            SolanaPubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")?;
 
         let config = RpcProgramAccountsConfig {
             filters: Some(vec![
@@ -1465,13 +1457,11 @@ impl OracleDataSources {
             .take(3);
 
         Retry::spawn(retry_strategy, || async {
-            let response = tokio::time::timeout(
-                Duration::from_secs(10),
-                self.http_client.get(url).send(),
-            )
-            .await
-            .context("CoinGecko API timeout")?
-            .context("Failed to send request to CoinGecko")?;
+            let response =
+                tokio::time::timeout(Duration::from_secs(10), self.http_client.get(url).send())
+                    .await
+                    .context("CoinGecko API timeout")?
+                    .context("Failed to send request to CoinGecko")?;
 
             if !response.status().is_success() {
                 return Err(anyhow!(
@@ -1557,7 +1547,7 @@ impl OracleDataSources {
                     .iter()
                     .map(|s| s.num_transactions / s.sample_period_secs as u64)
                     .sum();
-                
+
                 let avg_tps = total_tps as f64 / samples.len() as f64;
 
                 debug!("Network TPS: {:.1}", avg_tps);
@@ -1611,10 +1601,11 @@ impl OracleDataSources {
             .as_secs();
 
         // Simulate daily volume patterns with sinusoidal variation
-        let hour_factor = ((current_timestamp % 86400) as f64 / 86400.0 * 2.0 * std::f64::consts::PI)
-            .sin()
-            .abs();
-        
+        let hour_factor =
+            ((current_timestamp % 86400) as f64 / 86400.0 * 2.0 * std::f64::consts::PI)
+                .sin()
+                .abs();
+
         let base_volume = 50_000_000.0; // 50M USD base
         let daily_volume = base_volume + (base_volume * 0.5 * hour_factor);
 

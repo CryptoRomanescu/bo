@@ -28,10 +28,7 @@ pub struct StreamCoordinator {
 
 impl StreamCoordinator {
     /// Create a new stream coordinator
-    pub fn new(
-        config: TokenDetectorConfig,
-        output_sender: mpsc::Sender<DetectionEvent>,
-    ) -> Self {
+    pub fn new(config: TokenDetectorConfig, output_sender: mpsc::Sender<DetectionEvent>) -> Self {
         let (event_tx, event_rx) = mpsc::channel(1000);
 
         Self {
@@ -264,6 +261,10 @@ mod tests {
 
         let coordinator = StreamCoordinator::new(config, tx);
 
-        assert!(!coordinator.is_stream_running(DetectionSource::PumpFun).await);
+        assert!(
+            !coordinator
+                .is_stream_running(DetectionSource::PumpFun)
+                .await
+        );
     }
 }

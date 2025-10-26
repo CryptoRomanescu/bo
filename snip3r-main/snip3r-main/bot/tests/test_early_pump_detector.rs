@@ -10,7 +10,9 @@ use std::time::Instant;
 #[tokio::test]
 async fn test_single_decision_timing() {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     let deploy_timestamp = chrono::Utc::now().timestamp() as u64 - 30; // 30 seconds ago
@@ -43,7 +45,9 @@ async fn test_single_decision_timing() {
 
 #[tokio::test]
 async fn test_parallel_vs_sequential() {
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
 
     // Test parallel mode
     let config_parallel = EarlyPumpConfig {
@@ -54,7 +58,11 @@ async fn test_parallel_vs_sequential() {
 
     let start_parallel = Instant::now();
     let result_parallel = detector_parallel
-        .analyze("ParallelTestMint", chrono::Utc::now().timestamp() as u64, "pump.fun")
+        .analyze(
+            "ParallelTestMint",
+            chrono::Utc::now().timestamp() as u64,
+            "pump.fun",
+        )
         .await
         .unwrap();
     let time_parallel = start_parallel.elapsed().as_millis();
@@ -68,7 +76,11 @@ async fn test_parallel_vs_sequential() {
 
     let start_sequential = Instant::now();
     let result_sequential = detector_sequential
-        .analyze("SequentialTestMint", chrono::Utc::now().timestamp() as u64, "pump.fun")
+        .analyze(
+            "SequentialTestMint",
+            chrono::Utc::now().timestamp() as u64,
+            "pump.fun",
+        )
         .await
         .unwrap();
     let time_sequential = start_sequential.elapsed().as_millis();
@@ -98,11 +110,17 @@ async fn test_decision_thresholds() {
         pass_threshold: 50,
         ..Default::default()
     };
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     let result = detector
-        .analyze("ThresholdTestMint", chrono::Utc::now().timestamp() as u64, "pump.fun")
+        .analyze(
+            "ThresholdTestMint",
+            chrono::Utc::now().timestamp() as u64,
+            "pump.fun",
+        )
         .await
         .unwrap();
 
@@ -122,7 +140,9 @@ async fn test_decision_thresholds() {
 #[tokio::test]
 async fn test_1000_memecoin_launches() {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = Arc::new(EarlyPumpDetector::new(config, rpc));
 
     let total_launches = 1000;
@@ -145,7 +165,8 @@ async fn test_1000_memecoin_launches() {
 
             let handle = tokio::spawn(async move {
                 let mint = format!("SimulatedMint{}", launch_id);
-                let deploy_timestamp = chrono::Utc::now().timestamp() as u64 - (launch_id % 60) as u64;
+                let deploy_timestamp =
+                    chrono::Utc::now().timestamp() as u64 - (launch_id % 60) as u64;
                 let program = if launch_id % 4 == 0 {
                     "pump.fun"
                 } else if launch_id % 4 == 1 {
@@ -204,8 +225,16 @@ async fn test_1000_memecoin_launches() {
         overall_elapsed.as_millis() as f64 / total_launches as f64
     );
     println!("\n=== Decision Statistics ===");
-    println!("BUY decisions: {} ({:.1}%)", decisions_buy, decisions_buy as f64 / total_launches as f64 * 100.0);
-    println!("PASS decisions: {} ({:.1}%)", decisions_pass, decisions_pass as f64 / total_launches as f64 * 100.0);
+    println!(
+        "BUY decisions: {} ({:.1}%)",
+        decisions_buy,
+        decisions_buy as f64 / total_launches as f64 * 100.0
+    );
+    println!(
+        "PASS decisions: {} ({:.1}%)",
+        decisions_pass,
+        decisions_pass as f64 / total_launches as f64 * 100.0
+    );
     println!(
         "Decisions under 100s: {} ({:.1}%)",
         decisions_under_100s,
@@ -249,7 +278,9 @@ async fn test_1000_memecoin_launches() {
 #[tokio::test]
 async fn test_different_programs() {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     let programs = vec!["pump.fun", "raydium", "jupiter", "pumpswap"];
@@ -278,18 +309,27 @@ async fn test_check_timings_breakdown() {
         parallel_checks: true,
         ..Default::default()
     };
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     let result = detector
-        .analyze("TimingTestMint", chrono::Utc::now().timestamp() as u64, "pump.fun")
+        .analyze(
+            "TimingTestMint",
+            chrono::Utc::now().timestamp() as u64,
+            "pump.fun",
+        )
         .await
         .unwrap();
 
     let timings = &result.timings.check_timings;
 
     println!("=== Individual Check Timings ===");
-    println!("Supply concentration: {}ms", timings.supply_concentration_ms);
+    println!(
+        "Supply concentration: {}ms",
+        timings.supply_concentration_ms
+    );
     println!("LP lock: {}ms", timings.lp_lock_ms);
     println!("Wash trading: {}ms", timings.wash_trading_ms);
     println!("Smart money: {}ms", timings.smart_money_ms);
@@ -306,14 +346,16 @@ async fn test_check_timings_breakdown() {
 #[tokio::test]
 async fn test_detection_latency_tracking() {
     let config = EarlyPumpConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let detector = EarlyPumpDetector::new(config, rpc);
 
     // Simulate various detection latencies
     let test_cases = vec![
         ("Early detection", 5),   // 5 seconds after deploy
-        ("Medium detection", 30),  // 30 seconds after deploy
-        ("Late detection", 55),    // 55 seconds after deploy
+        ("Medium detection", 30), // 30 seconds after deploy
+        ("Late detection", 55),   // 55 seconds after deploy
     ];
 
     for (name, delay) in test_cases {

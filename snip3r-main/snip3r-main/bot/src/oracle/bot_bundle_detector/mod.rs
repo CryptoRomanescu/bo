@@ -15,13 +15,13 @@
 //! # Reference
 //! Based on CryptoRomanescu analysis of memecoin launches
 
-pub mod types;
-pub mod detector;
 pub mod analyzer;
+pub mod detector;
+pub mod types;
 
-pub use types::*;
-pub use detector::BotBundleDetector;
 pub use analyzer::BotActivityAnalyzer;
+pub use detector::BotBundleDetector;
+pub use types::*;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -32,31 +32,31 @@ use std::time::Duration;
 pub struct BotBundleConfig {
     /// Maximum analysis window from token launch (seconds)
     pub analysis_window_secs: u64,
-    
+
     /// Minimum transactions to analyze before making decision
     pub min_transactions: usize,
-    
+
     /// Maximum transactions to analyze
     pub max_transactions: usize,
-    
+
     /// Bot detection threshold - if transaction timing < this, likely bot (milliseconds)
     pub bot_timing_threshold_ms: u64,
-    
+
     /// Bundle detection - max time between transactions in a bundle (milliseconds)
     pub bundle_time_window_ms: u64,
-    
+
     /// Minimum bundle size to consider as coordinated
     pub min_bundle_size: usize,
-    
+
     /// High-frequency threshold - transactions per second to flag as bot
     pub high_frequency_threshold: f64,
-    
+
     /// Healthy organic ratio threshold (e.g., 0.30 = 30%)
     pub healthy_organic_threshold: f64,
-    
+
     /// Avoid threshold - bot percentage above which to avoid (e.g., 0.85 = 85%)
     pub avoid_bot_threshold: f64,
-    
+
     /// Timeout for analysis
     pub analysis_timeout: Duration,
 }
@@ -72,7 +72,7 @@ impl Default for BotBundleConfig {
             min_bundle_size: 3,
             high_frequency_threshold: 10.0, // >10 tx/s from same address = bot
             healthy_organic_threshold: 0.30, // 30% organic = healthy
-            avoid_bot_threshold: 0.85,       // 85% bot = avoid
+            avoid_bot_threshold: 0.85,      // 85% bot = avoid
             analysis_timeout: Duration::from_secs(10),
         }
     }
@@ -104,15 +104,12 @@ impl TokenClassification {
             Self::BundleCoordinated => "Coordinated bundle pump detected",
         }
     }
-    
+
     /// Whether this classification should trigger avoidance
     pub fn should_avoid(&self) -> bool {
-        matches!(
-            self,
-            Self::HighlyManipulated | Self::BundleCoordinated
-        )
+        matches!(self, Self::HighlyManipulated | Self::BundleCoordinated)
     }
-    
+
     /// Get risk score (0.0-1.0, higher = more risky)
     pub fn risk_score(&self) -> f64 {
         match self {

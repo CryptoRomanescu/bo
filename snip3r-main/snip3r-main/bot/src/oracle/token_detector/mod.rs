@@ -25,9 +25,7 @@
 pub mod dex_sources;
 pub mod stream_coordinator;
 
-pub use dex_sources::{
-    GeyserStream, JupiterStream, PumpFunStream, PumpSwapStream, RaydiumStream,
-};
+pub use dex_sources::{GeyserStream, JupiterStream, PumpFunStream, PumpSwapStream, RaydiumStream};
 pub use stream_coordinator::StreamCoordinator;
 
 use crate::types::PremintCandidate;
@@ -365,10 +363,7 @@ pub struct TokenDetector {
 
 impl TokenDetector {
     /// Create a new token detector
-    pub fn new(
-        config: TokenDetectorConfig,
-        output_sender: mpsc::Sender<PremintCandidate>,
-    ) -> Self {
+    pub fn new(config: TokenDetectorConfig, output_sender: mpsc::Sender<PremintCandidate>) -> Self {
         let dedup_tracker = DeduplicationTracker::new(config.dedup_window_ms);
 
         Self {
@@ -610,7 +605,10 @@ mod tests {
         let config = TokenDetectorConfig::default();
         let detector = TokenDetector::new(config, tx);
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let event1 = DetectionEvent {
             mint: "duplicate_mint".to_string(),

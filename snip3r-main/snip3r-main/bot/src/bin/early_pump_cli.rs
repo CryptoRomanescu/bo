@@ -30,8 +30,14 @@ async fn main() -> Result<()> {
     match command.as_str() {
         "analyze" => {
             if args.len() < 4 {
-                eprintln!("Usage: {} analyze <mint_address> <program> [deploy_timestamp]", args[0]);
-                eprintln!("Example: {} analyze 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU pump.fun", args[0]);
+                eprintln!(
+                    "Usage: {} analyze <mint_address> <program> [deploy_timestamp]",
+                    args[0]
+                );
+                eprintln!(
+                    "Example: {} analyze 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU pump.fun",
+                    args[0]
+                );
                 return Ok(());
             }
 
@@ -53,7 +59,8 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let count = args.get(2)
+            let count = args
+                .get(2)
                 .and_then(|s| s.parse::<usize>().ok())
                 .unwrap_or(10);
 
@@ -88,7 +95,10 @@ fn print_usage(program_name: &str) {
     println!("    help                                   Show this help message");
     println!();
     println!("EXAMPLES:");
-    println!("    {} analyze 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU pump.fun", program_name);
+    println!(
+        "    {} analyze 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU pump.fun",
+        program_name
+    );
     println!("    {} batch 100", program_name);
     println!("    {} benchmark", program_name);
     println!();
@@ -153,10 +163,19 @@ async fn analyze_token(mint: &str, program: &str, deploy_timestamp: u64) -> Resu
 
     // Timing
     println!("⏱️  TIMING:");
-    println!("   Deploy → Detection:    {} ms", result.timings.deploy_to_detection_ms);
-    println!("   Detection → Decision:  {} ms", result.timings.detection_to_decision_ms);
-    println!("   Total:                 {} ms", result.timings.total_decision_time_ms);
-    
+    println!(
+        "   Deploy → Detection:    {} ms",
+        result.timings.deploy_to_detection_ms
+    );
+    println!(
+        "   Detection → Decision:  {} ms",
+        result.timings.detection_to_decision_ms
+    );
+    println!(
+        "   Total:                 {} ms",
+        result.timings.total_decision_time_ms
+    );
+
     if result.timings.total_decision_time_ms < 100_000 {
         println!("   ✅ Within 100s target!");
     } else {
@@ -166,20 +185,50 @@ async fn analyze_token(mint: &str, program: &str, deploy_timestamp: u64) -> Resu
 
     // Check results
     println!("📈 CHECK BREAKDOWN:");
-    println!("   Supply Concentration:  {}/100 (lower is better)", result.check_results.supply_concentration);
-    println!("   LP Lock:               {}/100 (higher is better)", result.check_results.lp_lock);
-    println!("   Wash Trading Risk:     {}/100 (lower is better)", result.check_results.wash_trading_risk);
-    println!("   Smart Money:           {}/100 (higher is better)", result.check_results.smart_money);
-    println!("   Holder Growth:         {}/100 (higher is better)", result.check_results.holder_growth);
+    println!(
+        "   Supply Concentration:  {}/100 (lower is better)",
+        result.check_results.supply_concentration
+    );
+    println!(
+        "   LP Lock:               {}/100 (higher is better)",
+        result.check_results.lp_lock
+    );
+    println!(
+        "   Wash Trading Risk:     {}/100 (lower is better)",
+        result.check_results.wash_trading_risk
+    );
+    println!(
+        "   Smart Money:           {}/100 (higher is better)",
+        result.check_results.smart_money
+    );
+    println!(
+        "   Holder Growth:         {}/100 (higher is better)",
+        result.check_results.holder_growth
+    );
     println!();
 
     // Individual timing breakdown
     println!("⏱️  CHECK TIMINGS:");
-    println!("   Supply Concentration:  {} ms", result.timings.check_timings.supply_concentration_ms);
-    println!("   LP Lock:               {} ms", result.timings.check_timings.lp_lock_ms);
-    println!("   Wash Trading:          {} ms", result.timings.check_timings.wash_trading_ms);
-    println!("   Smart Money:           {} ms", result.timings.check_timings.smart_money_ms);
-    println!("   Holder Growth:         {} ms", result.timings.check_timings.holder_growth_ms);
+    println!(
+        "   Supply Concentration:  {} ms",
+        result.timings.check_timings.supply_concentration_ms
+    );
+    println!(
+        "   LP Lock:               {} ms",
+        result.timings.check_timings.lp_lock_ms
+    );
+    println!(
+        "   Wash Trading:          {} ms",
+        result.timings.check_timings.wash_trading_ms
+    );
+    println!(
+        "   Smart Money:           {} ms",
+        result.timings.check_timings.smart_money_ms
+    );
+    println!(
+        "   Holder Growth:         {} ms",
+        result.timings.check_timings.holder_growth_ms
+    );
     println!();
 
     // Export as JSON
@@ -248,20 +297,44 @@ async fn batch_analyze(count: usize) -> Result<()> {
     println!();
     println!("📊 STATISTICS:");
     println!("   Total tokens:          {}", count);
-    println!("   BUY decisions:         {} ({:.1}%)", buy_count, buy_count as f64 / count as f64 * 100.0);
-    println!("   PASS decisions:        {} ({:.1}%)", pass_count, pass_count as f64 / count as f64 * 100.0);
-    println!("   Under 100s:            {} ({:.1}%)", under_100s, under_100s as f64 / count as f64 * 100.0);
+    println!(
+        "   BUY decisions:         {} ({:.1}%)",
+        buy_count,
+        buy_count as f64 / count as f64 * 100.0
+    );
+    println!(
+        "   PASS decisions:        {} ({:.1}%)",
+        pass_count,
+        pass_count as f64 / count as f64 * 100.0
+    );
+    println!(
+        "   Under 100s:            {} ({:.1}%)",
+        under_100s,
+        under_100s as f64 / count as f64 * 100.0
+    );
     println!();
     println!("⏱️  TIMING:");
-    println!("   Total wall time:       {:.2}s", total_elapsed.as_secs_f64());
-    println!("   Avg time per token:    {:.2}ms", total_time_ms as f64 / count as f64);
+    println!(
+        "   Total wall time:       {:.2}s",
+        total_elapsed.as_secs_f64()
+    );
+    println!(
+        "   Avg time per token:    {:.2}ms",
+        total_time_ms as f64 / count as f64
+    );
     println!();
 
     let success_rate = under_100s as f64 / count as f64;
     if success_rate >= 0.95 {
-        println!("✅ SUCCESS: {:.1}% under 100s (target: 95%)", success_rate * 100.0);
+        println!(
+            "✅ SUCCESS: {:.1}% under 100s (target: 95%)",
+            success_rate * 100.0
+        );
     } else {
-        println!("⚠️  WARNING: Only {:.1}% under 100s (target: 95%)", success_rate * 100.0);
+        println!(
+            "⚠️  WARNING: Only {:.1}% under 100s (target: 95%)",
+            success_rate * 100.0
+        );
     }
 
     Ok(())
@@ -278,20 +351,29 @@ async fn benchmark() -> Result<()> {
 
     // Test different configurations
     let configs = vec![
-        ("Parallel (default)", EarlyPumpConfig {
-            parallel_checks: true,
-            ..Default::default()
-        }),
-        ("Sequential", EarlyPumpConfig {
-            parallel_checks: false,
-            ..Default::default()
-        }),
-        ("Aggressive (30s timeout)", EarlyPumpConfig {
-            detection_timeout_secs: 30,
-            decision_timeout_secs: 30,
-            parallel_checks: true,
-            ..Default::default()
-        }),
+        (
+            "Parallel (default)",
+            EarlyPumpConfig {
+                parallel_checks: true,
+                ..Default::default()
+            },
+        ),
+        (
+            "Sequential",
+            EarlyPumpConfig {
+                parallel_checks: false,
+                ..Default::default()
+            },
+        ),
+        (
+            "Aggressive (30s timeout)",
+            EarlyPumpConfig {
+                detection_timeout_secs: 30,
+                decision_timeout_secs: 30,
+                parallel_checks: true,
+                ..Default::default()
+            },
+        ),
     ];
 
     for (name, config) in configs {
@@ -305,7 +387,11 @@ async fn benchmark() -> Result<()> {
         for i in 0..iterations {
             let mint = format!("BenchMint{}", i);
             let result = detector
-                .analyze(&mint, chrono::Utc::now().timestamp() as u64 - 20, "pump.fun")
+                .analyze(
+                    &mint,
+                    chrono::Utc::now().timestamp() as u64 - 20,
+                    "pump.fun",
+                )
                 .await?;
             timings.push(result.timings.total_decision_time_ms);
         }

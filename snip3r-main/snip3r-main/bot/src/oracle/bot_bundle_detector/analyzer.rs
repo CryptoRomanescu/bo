@@ -60,8 +60,7 @@ impl BotActivityAnalyzer {
             0.0
         };
 
-        let instant_transaction_percentage =
-            instant_tx_count as f64 / transactions.len() as f64;
+        let instant_transaction_percentage = instant_tx_count as f64 / transactions.len() as f64;
 
         // Detect high-frequency bots
         let repeated_addresses = self.detect_repeated_addresses(transactions)?;
@@ -355,14 +354,14 @@ mod tests {
 
         let base_time = Utc::now();
         let transactions = vec![
-            create_test_transaction("bot1", base_time, 50),  // Bot (fast)
-            create_test_transaction("bot2", base_time, 80),  // Bot (fast)
+            create_test_transaction("bot1", base_time, 50), // Bot (fast)
+            create_test_transaction("bot2", base_time, 80), // Bot (fast)
             create_test_transaction("human1", base_time, 5000), // Human (slow)
-            create_test_transaction("bot3", base_time, 90),  // Bot (fast)
+            create_test_transaction("bot3", base_time, 90), // Bot (fast)
         ];
 
         let metrics = analyzer.analyze_bot_activity(&transactions, 0).unwrap();
-        
+
         assert_eq!(metrics.bot_transaction_count, 3);
         assert_eq!(metrics.unique_bot_addresses, 3);
         assert!(metrics.avg_bot_response_time_ms < 100.0);
@@ -386,11 +385,15 @@ mod tests {
         ];
 
         let repeated = analyzer.detect_repeated_addresses(&transactions).unwrap();
-        
+
         assert_eq!(repeated.len(), 1);
         assert_eq!(repeated[0].address, "bot1");
         assert_eq!(repeated[0].transaction_count, 6);
-        assert!(repeated[0].bot_probability > 0.5, "Expected bot probability > 0.5, got {}", repeated[0].bot_probability);
+        assert!(
+            repeated[0].bot_probability > 0.5,
+            "Expected bot probability > 0.5, got {}",
+            repeated[0].bot_probability
+        );
     }
 
     #[test]
@@ -420,12 +423,20 @@ mod tests {
         let transactions = vec![
             create_test_transaction("addr1", base_time, 50),
             create_test_transaction("addr2", base_time + chrono::Duration::milliseconds(50), 100),
-            create_test_transaction("addr3", base_time + chrono::Duration::milliseconds(100), 150),
-            create_test_transaction("addr4", base_time + chrono::Duration::milliseconds(150), 200),
+            create_test_transaction(
+                "addr3",
+                base_time + chrono::Duration::milliseconds(100),
+                150,
+            ),
+            create_test_transaction(
+                "addr4",
+                base_time + chrono::Duration::milliseconds(150),
+                200,
+            ),
         ];
 
         let clusters = analyzer.detect_suspicious_clusters(&transactions).unwrap();
-        
+
         assert!(!clusters.is_empty());
         assert!(clusters[0].transaction_count >= min_bundle_size);
     }

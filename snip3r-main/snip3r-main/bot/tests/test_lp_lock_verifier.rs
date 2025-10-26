@@ -2,9 +2,7 @@
 //!
 //! Validates LP lock/burn detection and risk assessment
 
-use h_5n1p3r::oracle::{
-    LockStatus, LpLockConfig, LpLockVerifier, RiskLevel,
-};
+use h_5n1p3r::oracle::{LockStatus, LpLockConfig, LpLockVerifier, RiskLevel};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use std::sync::Arc;
 use std::time::Instant;
@@ -13,11 +11,13 @@ use std::time::Instant;
 async fn test_lp_verification_performance() {
     // Test that verification completes within 5s requirement
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     let start = Instant::now();
-    
+
     // Verify a test token (this will likely fail with Unknown status in test)
     let result = verifier
         .verify("TestMintAddress123456789", "pump.fun")
@@ -51,7 +51,9 @@ async fn test_lp_verification_performance() {
 #[test]
 fn test_risk_level_locked() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test fully locked with 1 year duration - should be Minimal risk
@@ -61,7 +63,10 @@ fn test_risk_level_locked() {
         expiry_timestamp: chrono::Utc::now().timestamp() as u64 + 365 * 24 * 60 * 60,
         percentage_locked: 100,
     };
-    assert_eq!(verifier.calculate_risk_level(&locked_full), RiskLevel::Minimal);
+    assert_eq!(
+        verifier.calculate_risk_level(&locked_full),
+        RiskLevel::Minimal
+    );
 
     // Test 80% locked with short duration - should be Low risk
     let locked_80 = LockStatus::Locked {
@@ -94,7 +99,9 @@ fn test_risk_level_locked() {
 #[test]
 fn test_risk_level_burned() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test fully burned - should be Minimal risk
@@ -102,7 +109,10 @@ fn test_risk_level_burned() {
         burn_address: "11111111111111111111111111111111".to_string(),
         percentage_burned: 100,
     };
-    assert_eq!(verifier.calculate_risk_level(&burned_full), RiskLevel::Minimal);
+    assert_eq!(
+        verifier.calculate_risk_level(&burned_full),
+        RiskLevel::Minimal
+    );
 
     // Test 85% burned - should be Low risk
     let burned_85 = LockStatus::Burned {
@@ -129,14 +139,19 @@ fn test_risk_level_burned() {
 #[test]
 fn test_risk_level_unlocked() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test fully unlocked - should be Critical risk
     let unlocked = LockStatus::Unlocked {
         percentage_unlocked: 100,
     };
-    assert_eq!(verifier.calculate_risk_level(&unlocked), RiskLevel::Critical);
+    assert_eq!(
+        verifier.calculate_risk_level(&unlocked),
+        RiskLevel::Critical
+    );
 
     // Test unknown - should be Critical risk
     let unknown = LockStatus::Unknown {
@@ -148,7 +163,9 @@ fn test_risk_level_unlocked() {
 #[test]
 fn test_risk_level_partial() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test 50% locked + 50% burned = 100% secured - should be Minimal risk
@@ -157,7 +174,10 @@ fn test_risk_level_partial() {
         burned_percentage: 50,
         lock_info: None,
     };
-    assert_eq!(verifier.calculate_risk_level(&partial_full), RiskLevel::Minimal);
+    assert_eq!(
+        verifier.calculate_risk_level(&partial_full),
+        RiskLevel::Minimal
+    );
 
     // Test 40% locked + 45% burned = 85% secured - should be Low risk
     let partial_85 = LockStatus::Partial {
@@ -173,7 +193,10 @@ fn test_risk_level_partial() {
         burned_percentage: 30,
         lock_info: None,
     };
-    assert_eq!(verifier.calculate_risk_level(&partial_60), RiskLevel::Medium);
+    assert_eq!(
+        verifier.calculate_risk_level(&partial_60),
+        RiskLevel::Medium
+    );
 
     // Test 20% locked + 20% burned = 40% secured - should be High risk
     let partial_40 = LockStatus::Partial {
@@ -187,7 +210,9 @@ fn test_risk_level_partial() {
 #[test]
 fn test_safety_score_calculation() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test fully locked with 1 year - should be 100
@@ -239,7 +264,9 @@ fn test_safety_score_calculation() {
 #[test]
 fn test_auto_reject_logic() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Critical risk should always auto-reject
@@ -276,7 +303,9 @@ fn test_auto_reject_logic() {
 #[test]
 fn test_notes_generation() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test locked status notes
@@ -323,7 +352,9 @@ fn test_custom_config() {
         min_lock_duration_days: 365,
         auto_reject_threshold: 60,
     };
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(custom_config, rpc);
 
     // Test that custom thresholds are respected
@@ -334,7 +365,7 @@ fn test_custom_config() {
         percentage_locked: 85,
     };
     let risk = verifier.calculate_risk_level(&locked_85);
-    
+
     // With 90% threshold, 85% should be Medium risk
     assert!(risk >= RiskLevel::Medium);
 }
@@ -342,7 +373,9 @@ fn test_custom_config() {
 #[test]
 fn test_edge_case_zero_percentage() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test 0% locked - should be High risk
@@ -367,7 +400,9 @@ fn test_edge_case_zero_percentage() {
 #[test]
 fn test_edge_case_soon_to_expire_lock() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test lock expiring in 1 day - should be Low or Medium risk
@@ -379,7 +414,7 @@ fn test_edge_case_soon_to_expire_lock() {
     };
     let risk = verifier.calculate_risk_level(&soon_expire);
     assert!(risk >= RiskLevel::Low); // Should not be minimal due to short duration
-    
+
     let notes = verifier.generate_notes(&soon_expire, &risk);
     assert!(notes.iter().any(|n| n.contains("below recommended")));
 }
@@ -387,7 +422,9 @@ fn test_edge_case_soon_to_expire_lock() {
 #[test]
 fn test_edge_case_partial_both_zero() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test 0% locked + 0% burned - should be High risk
@@ -396,14 +433,19 @@ fn test_edge_case_partial_both_zero() {
         burned_percentage: 0,
         lock_info: None,
     };
-    assert_eq!(verifier.calculate_risk_level(&partial_zero), RiskLevel::High);
+    assert_eq!(
+        verifier.calculate_risk_level(&partial_zero),
+        RiskLevel::High
+    );
     assert_eq!(verifier.calculate_safety_score(&partial_zero), 0);
 }
 
 #[test]
 fn test_edge_case_partial_exceeds_100() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test edge case where locked + burned might theoretically exceed 100%
@@ -425,7 +467,9 @@ fn test_auto_reject_high_risk_with_threshold() {
         min_lock_duration_days: 180,
         auto_reject_threshold: 60, // Higher threshold
     };
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Unlocked status is always Critical risk, so it will always auto-reject
@@ -460,7 +504,9 @@ fn test_auto_reject_high_risk_with_threshold() {
 #[test]
 fn test_partial_auto_reject_logic() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test partial with 20% locked + 20% burned = 40% secured (below 50% threshold)
@@ -485,7 +531,9 @@ fn test_partial_auto_reject_logic() {
 #[test]
 fn test_notes_all_status_types() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test Partial notes
@@ -512,7 +560,9 @@ fn test_notes_all_status_types() {
 #[test]
 fn test_safety_score_duration_bonus() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test 100% locked with 0 days - should have no duration bonus
@@ -547,7 +597,9 @@ fn test_safety_score_duration_bonus() {
 #[test]
 fn test_risk_level_boundary_conditions() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test exactly 95% locked - should be Minimal
@@ -557,7 +609,10 @@ fn test_risk_level_boundary_conditions() {
         expiry_timestamp: 0,
         percentage_locked: 95,
     };
-    assert_eq!(verifier.calculate_risk_level(&locked_95), RiskLevel::Minimal);
+    assert_eq!(
+        verifier.calculate_risk_level(&locked_95),
+        RiskLevel::Minimal
+    );
 
     // Test exactly 94% locked - should be Low (not Minimal)
     let locked_94 = LockStatus::Locked {
@@ -608,23 +663,25 @@ fn test_risk_level_boundary_conditions() {
 #[test]
 fn test_secured_address_detection() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test burn addresses (using literal addresses for test clarity)
     assert!(verifier.is_address_secured("11111111111111111111111111111111")); // System Program
     assert!(verifier.is_address_secured("1nc1nerator11111111111111111111111111111111")); // Incinerator
-    
+
     // Test lock programs
     assert!(verifier.is_address_secured("LocktDzaV1W2Bm9DeZeiyz4J9zs4fRqNiYqQyracRXw")); // Streamflow
-    
+
     // Test DEX programs
     assert!(verifier.is_address_secured("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")); // Raydium
     assert!(verifier.is_address_secured("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc")); // Orca
-    
+
     // Test farm programs
     assert!(verifier.is_address_secured("EhhTKczWMGQt46ynNeRX1WfeagwwJd7ufHvCDjRxjo5Q")); // Raydium Farm
-    
+
     // Test unsecured address (random user wallet)
     assert!(!verifier.is_address_secured("SomeRandomUserWalletAddress1234567890ABC"));
 }
@@ -632,22 +689,24 @@ fn test_secured_address_detection() {
 #[test]
 fn test_edge_case_expired_lock() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test lock that has technically expired (0 seconds remaining)
     let expired_lock = LockStatus::Locked {
         contract: "test".to_string(),
-        duration_secs: 0, // Expired
+        duration_secs: 0,                                               // Expired
         expiry_timestamp: chrono::Utc::now().timestamp() as u64 - 1000, // Past
         percentage_locked: 100,
     };
-    
+
     // Even expired, if 100% locked it should not be Critical
     // (Contract enforcement would prevent withdrawal regardless)
     let risk = verifier.calculate_risk_level(&expired_lock);
     assert!(risk != RiskLevel::Minimal); // Should not be minimal with 0 duration
-    
+
     let score = verifier.calculate_safety_score(&expired_lock);
     assert!(score > 0); // Should have some score based on percentage
 }
@@ -655,7 +714,9 @@ fn test_edge_case_expired_lock() {
 #[test]
 fn test_multiple_lock_sources() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test partial: both locked and burned
@@ -669,8 +730,11 @@ fn test_multiple_lock_sources() {
             percentage_locked: 60,
         })),
     };
-    
-    assert_eq!(verifier.calculate_risk_level(&multi_lock), RiskLevel::Minimal); // 100% total
+
+    assert_eq!(
+        verifier.calculate_risk_level(&multi_lock),
+        RiskLevel::Minimal
+    ); // 100% total
     assert_eq!(verifier.calculate_safety_score(&multi_lock), 100); // 60 + 40 = 100
     assert!(!verifier.should_auto_reject(&multi_lock, &RiskLevel::Minimal));
 }
@@ -678,16 +742,18 @@ fn test_multiple_lock_sources() {
 #[test]
 fn test_platform_specific_verification() {
     let config = LpLockConfig::default();
-    
+
     // Verify the default configuration is correct
     assert_eq!(config.timeout_secs, 5);
     assert_eq!(config.min_lock_percentage, 80);
     assert_eq!(config.min_lock_duration_days, 180);
-    
+
     // Create verifier with the config
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let _verifier = LpLockVerifier::new(config, rpc);
-    
+
     // Just verify the verifier is created properly for different platforms
     // Actual platform verification requires real RPC calls which we can't mock here
 }
@@ -695,7 +761,9 @@ fn test_platform_specific_verification() {
 #[test]
 fn test_conservative_defaults() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Unknown status should have zero safety score (conservative)
@@ -710,7 +778,9 @@ fn test_conservative_defaults() {
 #[test]
 fn test_notes_quality() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test that notes contain useful information
@@ -721,7 +791,7 @@ fn test_notes_quality() {
     };
     let risk = verifier.calculate_risk_level(&partial);
     let notes = verifier.generate_notes(&partial, &risk);
-    
+
     // Should mention both locked and burned
     assert!(notes.iter().any(|n| n.contains("50%")));
     assert!(notes.iter().any(|n| n.contains("30%")));
@@ -736,7 +806,9 @@ fn test_config_customization() {
         min_lock_duration_days: 365,
         auto_reject_threshold: 70,
     };
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(custom_config.clone(), rpc);
 
     // Verify custom config is used
@@ -746,16 +818,22 @@ fn test_config_customization() {
         expiry_timestamp: 0,
         percentage_locked: 85,
     };
-    
+
     // With 90% min threshold, 85% locked should be Medium or worse (not Low/Minimal)
     let risk = verifier.calculate_risk_level(&locked_85);
-    assert!(risk >= RiskLevel::Medium, "Expected Medium or worse risk, got {:?}", risk);
+    assert!(
+        risk >= RiskLevel::Medium,
+        "Expected Medium or worse risk, got {:?}",
+        risk
+    );
 }
 
 #[test]
 fn test_integer_math_precision() {
     let config = LpLockConfig::default();
-    let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+    let rpc = Arc::new(RpcClient::new(
+        "https://api.mainnet-beta.solana.com".to_string(),
+    ));
     let verifier = LpLockVerifier::new(config, rpc);
 
     // Test that percentages are calculated correctly
@@ -765,10 +843,10 @@ fn test_integer_math_precision() {
         burned_percentage: 49,
         lock_info: None,
     };
-    
+
     let score = verifier.calculate_safety_score(&partial);
     assert_eq!(score, 99); // Should be exact
-    
+
     let risk = verifier.calculate_risk_level(&partial);
     assert_eq!(risk, RiskLevel::Minimal); // 99% >= 95%
 }

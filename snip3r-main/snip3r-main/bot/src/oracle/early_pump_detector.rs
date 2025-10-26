@@ -22,7 +22,7 @@
 
 use crate::oracle::early_pump_cache::EarlyPumpCache;
 use crate::oracle::graph_analyzer::{
-    GraphAnalyzerConfig, OnChainGraphAnalyzer, WashTradingDetector, WashTradingConfig,
+    GraphAnalyzerConfig, OnChainGraphAnalyzer, WashTradingConfig, WashTradingDetector,
 };
 use crate::oracle::holder_growth_analyzer::{HolderGrowthAnalyzer, HolderGrowthConfig};
 use crate::oracle::lp_lock_verifier::{LpLockConfig, LpLockVerifier, RiskLevel};
@@ -161,14 +161,14 @@ impl EarlyPumpDetector {
             "Initialized EarlyPumpDetector with detection_timeout={}s, decision_timeout={}s",
             config.detection_timeout_secs, config.decision_timeout_secs
         );
-        
+
         // Create LP Lock Verifier with optimized settings for fast checks
         let lp_config = LpLockConfig {
             timeout_secs: 5,
             ..Default::default()
         };
         let lp_lock_verifier = Arc::new(LpLockVerifier::new(lp_config, rpc_client.clone()));
-        
+
         // Create Wash Trading Detector with optimized settings
         let wash_config = WashTradingConfig {
             max_analysis_time_ms: 5000, // Fast analysis for real-time decisions
@@ -176,15 +176,18 @@ impl EarlyPumpDetector {
             ..Default::default()
         };
         let wash_trading_detector = Arc::new(WashTradingDetector::new(wash_config));
-        
+
         // Create Supply Concentration Analyzer with optimized settings
         let supply_config = SupplyConcentrationConfig {
             timeout_secs: 5,
             auto_reject_threshold: 70.0,
             ..Default::default()
         };
-        let supply_analyzer = Arc::new(SupplyConcentrationAnalyzer::new(supply_config, rpc_client.clone()));
-        
+        let supply_analyzer = Arc::new(SupplyConcentrationAnalyzer::new(
+            supply_config,
+            rpc_client.clone(),
+        ));
+
         // Create Holder Growth Analyzer with optimized settings
         let growth_config = HolderGrowthConfig {
             snapshot_interval_secs: 3,
@@ -192,11 +195,12 @@ impl EarlyPumpDetector {
             timeout_secs: 10,
             ..Default::default()
         };
-        let holder_growth_analyzer = Arc::new(HolderGrowthAnalyzer::new(growth_config, rpc_client.clone()));
-        
+        let holder_growth_analyzer =
+            Arc::new(HolderGrowthAnalyzer::new(growth_config, rpc_client.clone()));
+
         // Create cache with 60s TTL and 1000 entry capacity
         let cache = Arc::new(EarlyPumpCache::new(1000, 60));
-        
+
         Self {
             config,
             rpc_client,
@@ -215,17 +219,15 @@ impl EarlyPumpDetector {
         rpc_client: Arc<RpcClient>,
         smart_money_tracker: Arc<SmartMoneyTracker>,
     ) -> Self {
-        info!(
-            "Initialized EarlyPumpDetector with smart money tracking enabled"
-        );
-        
+        info!("Initialized EarlyPumpDetector with smart money tracking enabled");
+
         // Create LP Lock Verifier with optimized settings for fast checks
         let lp_config = LpLockConfig {
             timeout_secs: 5,
             ..Default::default()
         };
         let lp_lock_verifier = Arc::new(LpLockVerifier::new(lp_config, rpc_client.clone()));
-        
+
         // Create Wash Trading Detector with optimized settings
         let wash_config = WashTradingConfig {
             max_analysis_time_ms: 5000, // Fast analysis for real-time decisions
@@ -233,15 +235,18 @@ impl EarlyPumpDetector {
             ..Default::default()
         };
         let wash_trading_detector = Arc::new(WashTradingDetector::new(wash_config));
-        
+
         // Create Supply Concentration Analyzer with optimized settings
         let supply_config = SupplyConcentrationConfig {
             timeout_secs: 5,
             auto_reject_threshold: 70.0,
             ..Default::default()
         };
-        let supply_analyzer = Arc::new(SupplyConcentrationAnalyzer::new(supply_config, rpc_client.clone()));
-        
+        let supply_analyzer = Arc::new(SupplyConcentrationAnalyzer::new(
+            supply_config,
+            rpc_client.clone(),
+        ));
+
         // Create Holder Growth Analyzer with optimized settings
         let growth_config = HolderGrowthConfig {
             snapshot_interval_secs: 3,
@@ -249,11 +254,12 @@ impl EarlyPumpDetector {
             timeout_secs: 10,
             ..Default::default()
         };
-        let holder_growth_analyzer = Arc::new(HolderGrowthAnalyzer::new(growth_config, rpc_client.clone()));
-        
+        let holder_growth_analyzer =
+            Arc::new(HolderGrowthAnalyzer::new(growth_config, rpc_client.clone()));
+
         // Create cache with 60s TTL and 1000 entry capacity
         let cache = Arc::new(EarlyPumpCache::new(1000, 60));
-        
+
         Self {
             config,
             rpc_client,
@@ -276,7 +282,12 @@ impl EarlyPumpDetector {
     /// # Returns
     /// Complete analysis with decision and timing metrics
     #[instrument(skip(self))]
-    pub async fn analyze(&self, mint: &str, deploy_timestamp: u64, program: &str) -> Result<EarlyPumpAnalysis> {
+    pub async fn analyze(
+        &self,
+        mint: &str,
+        deploy_timestamp: u64,
+        program: &str,
+    ) -> Result<EarlyPumpAnalysis> {
         // Check cache first
         if let Some(cached_analysis) = self.cache.get(mint).await {
             info!("Using cached analysis for mint={}", mint);
@@ -308,15 +319,21 @@ impl EarlyPumpDetector {
         // Run parallel checks with timeout
         let decision_timeout = Duration::from_secs(self.config.decision_timeout_secs);
         let (check_results, check_timings) = if self.config.parallel_checks {
-            timeout(decision_timeout, self.run_parallel_checks(mint, deploy_timestamp, program))
-                .await
-                .context("Decision timeout exceeded")?
-                .context("Parallel checks failed")?
+            timeout(
+                decision_timeout,
+                self.run_parallel_checks(mint, deploy_timestamp, program),
+            )
+            .await
+            .context("Decision timeout exceeded")?
+            .context("Parallel checks failed")?
         } else {
-            timeout(decision_timeout, self.run_sequential_checks(mint, deploy_timestamp, program))
-                .await
-                .context("Decision timeout exceeded")?
-                .context("Sequential checks failed")?
+            timeout(
+                decision_timeout,
+                self.run_sequential_checks(mint, deploy_timestamp, program),
+            )
+            .await
+            .context("Decision timeout exceeded")?
+            .context("Sequential checks failed")?
         };
 
         let decision_timestamp = chrono::Utc::now().timestamp() as u64;
@@ -363,12 +380,17 @@ impl EarlyPumpDetector {
     }
 
     /// Force refresh analysis for a token (bypasses cache)
-    pub async fn force_refresh(&self, mint: &str, deploy_timestamp: u64, program: &str) -> Result<EarlyPumpAnalysis> {
+    pub async fn force_refresh(
+        &self,
+        mint: &str,
+        deploy_timestamp: u64,
+        program: &str,
+    ) -> Result<EarlyPumpAnalysis> {
         info!("Force refresh requested for mint={}", mint);
-        
+
         // Invalidate cache
         self.cache.force_refresh(mint).await;
-        
+
         // Run fresh analysis
         self.analyze(mint, deploy_timestamp, program).await
     }
@@ -385,7 +407,12 @@ impl EarlyPumpDetector {
     }
 
     /// Run all checks in parallel for maximum speed
-    async fn run_parallel_checks(&self, mint: &str, deploy_timestamp: u64, program: &str) -> Result<(CheckResults, CheckTimings)> {
+    async fn run_parallel_checks(
+        &self,
+        mint: &str,
+        deploy_timestamp: u64,
+        program: &str,
+    ) -> Result<(CheckResults, CheckTimings)> {
         let mint = mint.to_string();
         let program = program.to_string();
 
@@ -393,7 +420,7 @@ impl EarlyPumpDetector {
         let supply_check: tokio::task::JoinHandle<Result<(u8, u64)>> = {
             let mint = mint.clone();
             let analyzer = self.supply_analyzer.clone();
-            tokio::spawn(async move { 
+            tokio::spawn(async move {
                 let start = Instant::now();
                 match analyzer.analyze(&mint).await {
                     Ok(result) => {
@@ -415,25 +442,34 @@ impl EarlyPumpDetector {
             let mint = mint.clone();
             let program = program.clone();
             let verifier = self.lp_lock_verifier.clone();
-            tokio::spawn(async move { 
+            tokio::spawn(async move {
                 let start = Instant::now();
-                let result: Result<(u8, u64, Option<String>)> = match verifier.verify(&mint, &program).await {
-                    Ok(result) => {
-                        let elapsed = start.elapsed().as_millis() as u64;
-                        let summary = format!(
-                            "LP: {:?} (risk={:?}, safety={}{})",
-                            result.lock_status,
-                            result.risk_level,
-                            result.safety_score,
-                            if result.auto_reject { ", AUTO-REJECT" } else { "" }
-                        );
-                        Ok((result.safety_score, elapsed, Some(summary)))
-                    }
-                    Err(e) => {
-                        let elapsed = start.elapsed().as_millis() as u64;
-                        Ok((50u8, elapsed, Some(format!("LP verification failed: {}", e))))
-                    }
-                };
+                let result: Result<(u8, u64, Option<String>)> =
+                    match verifier.verify(&mint, &program).await {
+                        Ok(result) => {
+                            let elapsed = start.elapsed().as_millis() as u64;
+                            let summary = format!(
+                                "LP: {:?} (risk={:?}, safety={}{})",
+                                result.lock_status,
+                                result.risk_level,
+                                result.safety_score,
+                                if result.auto_reject {
+                                    ", AUTO-REJECT"
+                                } else {
+                                    ""
+                                }
+                            );
+                            Ok((result.safety_score, elapsed, Some(summary)))
+                        }
+                        Err(e) => {
+                            let elapsed = start.elapsed().as_millis() as u64;
+                            Ok((
+                                50u8,
+                                elapsed,
+                                Some(format!("LP verification failed: {}", e)),
+                            ))
+                        }
+                    };
                 result
             })
         };
@@ -448,13 +484,15 @@ impl EarlyPumpDetector {
         let smart_money_check = {
             let mint = mint.clone();
             let tracker = self.smart_money_tracker.clone();
-            tokio::spawn(async move { Self::check_smart_money_with_tracker(&mint, deploy_timestamp, tracker).await })
+            tokio::spawn(async move {
+                Self::check_smart_money_with_tracker(&mint, deploy_timestamp, tracker).await
+            })
         };
 
         let holder_check: tokio::task::JoinHandle<Result<(u8, u64)>> = {
             let mint = mint.clone();
             let analyzer = self.holder_growth_analyzer.clone();
-            tokio::spawn(async move { 
+            tokio::spawn(async move {
                 let start = Instant::now();
                 match analyzer.analyze(&mint, deploy_timestamp, None, None).await {
                     Ok(result) => {
@@ -521,14 +559,32 @@ impl EarlyPumpDetector {
     }
 
     /// Run checks sequentially (fallback mode)
-    async fn run_sequential_checks(&self, mint: &str, deploy_timestamp: u64, program: &str) -> Result<(CheckResults, CheckTimings)> {
-        let (supply_concentration, supply_time) =
-            self.check_supply_concentration(mint).await?;
-        let (lp_lock, lp_time, lp_details) = self.check_lp_lock(mint, program, self.rpc_client.clone()).await?;
-        let (wash_trading_risk, wash_time) = Self::check_wash_trading(mint, self.rpc_client.clone(), self.wash_trading_detector.clone()).await?;
+    async fn run_sequential_checks(
+        &self,
+        mint: &str,
+        deploy_timestamp: u64,
+        program: &str,
+    ) -> Result<(CheckResults, CheckTimings)> {
+        let (supply_concentration, supply_time) = self.check_supply_concentration(mint).await?;
+        let (lp_lock, lp_time, lp_details) = self
+            .check_lp_lock(mint, program, self.rpc_client.clone())
+            .await?;
+        let (wash_trading_risk, wash_time) = Self::check_wash_trading(
+            mint,
+            self.rpc_client.clone(),
+            self.wash_trading_detector.clone(),
+        )
+        .await?;
         let (smart_money, wallet_count, transactions, smart_time) =
-            Self::check_smart_money_with_tracker(mint, deploy_timestamp, self.smart_money_tracker.clone()).await?;
-        let (holder_growth, holder_time) = self.check_holder_growth_real(mint, deploy_timestamp).await?;
+            Self::check_smart_money_with_tracker(
+                mint,
+                deploy_timestamp,
+                self.smart_money_tracker.clone(),
+            )
+            .await?;
+        let (holder_growth, holder_time) = self
+            .check_holder_growth_real(mint, deploy_timestamp)
+            .await?;
 
         let results = CheckResults {
             supply_concentration,
@@ -562,7 +618,7 @@ impl EarlyPumpDetector {
             Ok(result) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let score = result.metrics.risk_score;
-                
+
                 info!(
                     "Supply analysis for {}: top10={:.1}%, top25={:.1}%, gini={:.3}, risk={}, auto_reject={}, time={}ms",
                     mint,
@@ -573,7 +629,7 @@ impl EarlyPumpDetector {
                     result.metrics.auto_reject,
                     elapsed
                 );
-                
+
                 debug!("Supply concentration check completed in {}ms", elapsed);
                 Ok((score, elapsed))
             }
@@ -586,7 +642,12 @@ impl EarlyPumpDetector {
     }
 
     /// Check LP lock status (higher score = better lock = safer)
-    async fn check_lp_lock(&self, mint: &str, program: &str, _rpc: Arc<RpcClient>) -> Result<(u8, u64, Option<String>)> {
+    async fn check_lp_lock(
+        &self,
+        mint: &str,
+        program: &str,
+        _rpc: Arc<RpcClient>,
+    ) -> Result<(u8, u64, Option<String>)> {
         let start = Instant::now();
         debug!("Checking LP lock for {} on {}", mint, program);
 
@@ -595,66 +656,85 @@ impl EarlyPumpDetector {
             Ok(result) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let score = result.safety_score;
-                
+
                 // Log LP verification details
                 info!(
                     "LP Lock verified for {}: status={:?}, risk={:?}, safety={}, auto_reject={}, time={}ms",
                     mint, result.lock_status, result.risk_level, score, result.auto_reject, elapsed
                 );
-                
+
                 // Create summary for notes
                 let summary = format!(
                     "LP: {:?} (risk={:?}, safety={}{})",
                     result.lock_status,
                     result.risk_level,
                     score,
-                    if result.auto_reject { ", AUTO-REJECT" } else { "" }
+                    if result.auto_reject {
+                        ", AUTO-REJECT"
+                    } else {
+                        ""
+                    }
                 );
-                
+
                 debug!("LP lock check completed in {}ms", elapsed);
                 Ok((score, elapsed, Some(summary)))
             }
             Err(e) => {
                 let elapsed = start.elapsed().as_millis() as u64;
-                warn!("LP lock verification failed for {}: {}, using fallback", mint, e);
-                
+                warn!(
+                    "LP lock verification failed for {}: {}, using fallback",
+                    mint, e
+                );
+
                 // Fallback to placeholder score (conservative approach)
                 let score = 50; // Neutral score when verification fails
                 debug!("LP lock fallback check completed in {}ms", elapsed);
-                Ok((score, elapsed, Some(format!("LP verification failed: {}", e))))
+                Ok((
+                    score,
+                    elapsed,
+                    Some(format!("LP verification failed: {}", e)),
+                ))
             }
         }
     }
 
     /// Check for wash trading patterns (higher score = more risk)
-    async fn check_wash_trading(mint: &str, rpc: Arc<RpcClient>, detector: Arc<WashTradingDetector>) -> Result<(u8, u64)> {
+    async fn check_wash_trading(
+        mint: &str,
+        rpc: Arc<RpcClient>,
+        detector: Arc<WashTradingDetector>,
+    ) -> Result<(u8, u64)> {
         let start = Instant::now();
         debug!("Checking wash trading for {}", mint);
 
         // Build transaction graph for analysis
         let graph_config = GraphAnalyzerConfig {
             max_transactions: 1000, // Limit for fast analysis
-            time_window_secs: 3600,  // Last hour
+            time_window_secs: 3600, // Last hour
             max_wallets: 500,
             ..Default::default()
         };
-        
-        let mut graph = crate::oracle::graph_analyzer::graph_builder::TransactionGraph::new(graph_config.clone());
-        
+
+        let mut graph = crate::oracle::graph_analyzer::graph_builder::TransactionGraph::new(
+            graph_config.clone(),
+        );
+
         // Build graph from on-chain data with timeout
         match tokio::time::timeout(
             Duration::from_secs(5),
-            graph.build_from_token(rpc.clone(), mint, Some(1000))
-        ).await {
+            graph.build_from_token(rpc.clone(), mint, Some(1000)),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 // Calculate metrics
                 graph.calculate_metrics();
-                
+
                 // Run wash trading detection
                 match detector.detect(&graph) {
                     Ok(result) => {
                         let elapsed = start.elapsed().as_millis() as u64;
-                        
+
                         info!(
                             "Wash trading analysis for {}: probability={:.3}, circularity={:.3}, clusters={}, time={}ms{}",
                             mint,
@@ -664,7 +744,7 @@ impl EarlyPumpDetector {
                             result.analysis_time_ms,
                             if result.auto_reject { ", AUTO-REJECT" } else { "" }
                         );
-                        
+
                         Ok((result.risk_score, elapsed))
                     }
                     Err(e) => {
@@ -701,14 +781,17 @@ impl EarlyPumpDetector {
             match tracker.check_smart_money(mint, deploy_timestamp).await {
                 Ok((score, wallet_count, transactions)) => {
                     let elapsed = start.elapsed().as_millis() as u64;
-                    
+
                     // Log detailed smart money activity
                     if wallet_count > 0 {
                         info!(
                             "🎯 Smart money detected for {}: {} wallets, score={}, {} transactions",
-                            mint, wallet_count, score, transactions.len()
+                            mint,
+                            wallet_count,
+                            score,
+                            transactions.len()
                         );
-                        
+
                         for tx in &transactions {
                             debug!(
                                 "  Wallet: {}, Amount: {} SOL, Time: {}, Tx: {}",
@@ -716,7 +799,7 @@ impl EarlyPumpDetector {
                             );
                         }
                     }
-                    
+
                     debug!("Smart money check completed in {}ms", elapsed);
                     Ok((score, wallet_count, transactions, elapsed))
                 }
@@ -732,10 +815,12 @@ impl EarlyPumpDetector {
     }
 
     /// Fallback smart money check (placeholder)
-    async fn check_smart_money_fallback(mint: &str) -> Result<(u8, usize, Vec<SmartWalletTransaction>, u64)> {
+    async fn check_smart_money_fallback(
+        mint: &str,
+    ) -> Result<(u8, usize, Vec<SmartWalletTransaction>, u64)> {
         let start = Instant::now();
         debug!("Using fallback smart money check for {}", mint);
-        
+
         tokio::time::sleep(Duration::from_millis(80)).await;
 
         let score = 55; // Placeholder score
@@ -761,14 +846,22 @@ impl EarlyPumpDetector {
     }
 
     /// Check holder growth rate with real analyzer (higher score = better growth)
-    async fn check_holder_growth_real(&self, mint: &str, deploy_timestamp: u64) -> Result<(u8, u64)> {
+    async fn check_holder_growth_real(
+        &self,
+        mint: &str,
+        deploy_timestamp: u64,
+    ) -> Result<(u8, u64)> {
         let start = Instant::now();
         debug!("Checking holder growth for {} with real analyzer", mint);
 
-        match self.holder_growth_analyzer.analyze(mint, deploy_timestamp, None, None).await {
+        match self
+            .holder_growth_analyzer
+            .analyze(mint, deploy_timestamp, None, None)
+            .await
+        {
             Ok(result) => {
                 let elapsed = start.elapsed().as_millis() as u64;
-                
+
                 info!(
                     "Holder growth analysis for {}: holders={}, growth_rate={:.2}, score={}, organic={}, bot_prob={:.2}, anomalies={}, time={}ms",
                     mint,
@@ -780,7 +873,7 @@ impl EarlyPumpDetector {
                     result.anomalies.len(),
                     elapsed
                 );
-                
+
                 debug!("Holder growth check completed in {}ms", elapsed);
                 Ok((result.growth_score, elapsed))
             }
@@ -858,7 +951,10 @@ impl EarlyPumpDetector {
         if score >= self.config.buy_threshold {
             let reason = format!(
                 "Strong fundamentals: LP lock={}, smart money={} ({} wallets), holder growth={}",
-                results.lp_lock, results.smart_money, results.smart_money_wallet_count, results.holder_growth
+                results.lp_lock,
+                results.smart_money,
+                results.smart_money_wallet_count,
+                results.holder_growth
             );
             return PumpDecision::Buy { score, reason };
         }
@@ -892,7 +988,9 @@ mod tests {
     #[tokio::test]
     async fn test_decision_timing() {
         let config = EarlyPumpConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let detector = EarlyPumpDetector::new(config, rpc);
 
         let deploy_timestamp = chrono::Utc::now().timestamp() as u64 - 30; // 30 seconds ago
@@ -902,8 +1000,14 @@ mod tests {
             .unwrap();
 
         // Verify timing constraints
-        assert!(result.timings.total_decision_time_ms < 100_000, "Decision took too long");
-        assert!(result.timings.detection_to_decision_ms < 60_000, "Decision phase took too long");
+        assert!(
+            result.timings.total_decision_time_ms < 100_000,
+            "Decision took too long"
+        );
+        assert!(
+            result.timings.detection_to_decision_ms < 60_000,
+            "Decision phase took too long"
+        );
     }
 
     #[tokio::test]
@@ -912,7 +1016,9 @@ mod tests {
             parallel_checks: true,
             ..Default::default()
         };
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let detector = EarlyPumpDetector::new(config, rpc);
 
         let result = detector
@@ -931,7 +1037,9 @@ mod tests {
     #[test]
     fn test_score_calculation() {
         let config = EarlyPumpConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let detector = EarlyPumpDetector::new(config, rpc);
 
         // Test high quality token
@@ -939,11 +1047,11 @@ mod tests {
             supply_concentration: 20, // Low concentration (good)
             lp_lock: 90,              // Strong lock (good)
             lp_lock_details: Some("Fully locked".to_string()),
-            wash_trading_risk: 10,    // Low risk (good)
-            smart_money: 80,          // High smart money (good)
+            wash_trading_risk: 10, // Low risk (good)
+            smart_money: 80,       // High smart money (good)
             smart_money_wallet_count: 3,
             smart_money_transactions: vec![],
-            holder_growth: 85,        // Strong growth (good)
+            holder_growth: 85, // Strong growth (good)
         };
         let score = detector.calculate_score(&good_results);
         assert!(score >= 70, "Good token should score high");
@@ -953,11 +1061,11 @@ mod tests {
             supply_concentration: 90, // High concentration (bad)
             lp_lock: 20,              // Weak lock (bad)
             lp_lock_details: Some("Unlocked".to_string()),
-            wash_trading_risk: 85,    // High risk (bad)
-            smart_money: 15,          // Low smart money (bad)
+            wash_trading_risk: 85, // High risk (bad)
+            smart_money: 15,       // Low smart money (bad)
             smart_money_wallet_count: 0,
             smart_money_transactions: vec![],
-            holder_growth: 25,        // Poor growth (bad)
+            holder_growth: 25, // Poor growth (bad)
         };
         let score = detector.calculate_score(&bad_results);
         assert!(score < 50, "Bad token should score low");
@@ -966,7 +1074,9 @@ mod tests {
     #[test]
     fn test_decision_logic() {
         let config = EarlyPumpConfig::default();
-        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let rpc = Arc::new(RpcClient::new(
+            "https://api.mainnet-beta.solana.com".to_string(),
+        ));
         let detector = EarlyPumpDetector::new(config, rpc);
 
         // High score should result in BUY

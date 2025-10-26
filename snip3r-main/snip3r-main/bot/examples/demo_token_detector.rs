@@ -6,9 +6,7 @@
 //! - Real-time metrics monitoring
 //! - Integration with decision engine
 
-use h_5n1p3r::oracle::{
-    DetectionEvent, DetectionSource, TokenDetector, TokenDetectorConfig,
-};
+use h_5n1p3r::oracle::{DetectionEvent, DetectionSource, TokenDetector, TokenDetectorConfig};
 use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -41,7 +39,10 @@ async fn main() -> anyhow::Result<()> {
     println!("Configuration:");
     println!("  Enabled Sources: {:?}", config.enabled_sources);
     println!("  Dedup Window: {}ms", config.dedup_window_ms);
-    println!("  Max Clock Skew: {}s", config.sensitivity.max_clock_skew_secs);
+    println!(
+        "  Max Clock Skew: {}s",
+        config.sensitivity.max_clock_skew_secs
+    );
     println!();
 
     // Create token detector

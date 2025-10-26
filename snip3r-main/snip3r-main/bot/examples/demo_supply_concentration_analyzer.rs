@@ -26,9 +26,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     println!("═══════════════════════════════════════════════════════════");
     println!("   Supply Concentration Analyzer Demo");
@@ -121,7 +119,10 @@ fn demo_scenario_2_risky_token() {
     };
 
     print_analysis_summary(&metrics, "RiskyToken456");
-    print_interpretation("DANGEROUS", "High concentration, 99% dump risk - AUTO REJECT");
+    print_interpretation(
+        "DANGEROUS",
+        "High concentration, 99% dump risk - AUTO REJECT",
+    );
 }
 
 /// Demo Scenario 3: Extreme Concentration (Rug Pull Risk)
@@ -169,10 +170,7 @@ fn demo_scenario_4_gini_coefficient() {
     println!("│ Gini Coef │ Description             │ Assessment   │");
     println!("├───────────┼─────────────────────────┼──────────────┤");
     for (gini, desc, assessment) in examples {
-        println!(
-            "│ {:.2}      │ {:<23} │ {:<12} │",
-            gini, desc, assessment
-        );
+        println!("│ {:.2}      │ {:<23} │ {:<12} │", gini, desc, assessment);
     }
     println!("└───────────┴─────────────────────────┴──────────────┘");
 }
@@ -188,20 +186,21 @@ fn print_analysis_summary(metrics: &ConcentrationMetrics, token_name: &str) {
     println!();
 
     println!("📈 Concentration Metrics:");
-    println!(
-        "  • Top 10 Holders: {:.1}%",
-        metrics.top_10_concentration
-    );
-    println!(
-        "  • Top 25 Holders: {:.1}%",
-        metrics.top_25_concentration
-    );
+    println!("  • Top 10 Holders: {:.1}%", metrics.top_10_concentration);
+    println!("  • Top 25 Holders: {:.1}%", metrics.top_25_concentration);
     println!("  • Gini Coefficient: {:.3}", metrics.gini_coefficient);
     println!();
 
     println!("⚠️  Risk Assessment:");
     println!("  • Risk Score: {}/100", metrics.risk_score);
-    println!("  • Auto-Reject: {}", if metrics.auto_reject { "YES ⛔" } else { "NO ✅" });
+    println!(
+        "  • Auto-Reject: {}",
+        if metrics.auto_reject {
+            "YES ⛔"
+        } else {
+            "NO ✅"
+        }
+    );
     println!();
 }
 
