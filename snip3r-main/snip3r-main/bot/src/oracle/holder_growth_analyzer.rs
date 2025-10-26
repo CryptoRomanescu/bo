@@ -125,6 +125,41 @@ pub struct HolderGrowthConfig {
     pub flattening_duration_threshold: u64,
     /// Rapid drop threshold (drop rate multiplier, default: 3x)
     pub rapid_drop_threshold: f64,
+    /// Bot probability weights
+    pub bot_prob_weights: BotProbabilityWeights,
+}
+
+/// Weights for bot probability calculation
+#[derive(Debug, Clone)]
+pub struct BotProbabilityWeights {
+    /// Base weight for sudden jumps (default: 0.3)
+    pub sudden_jump_base: f64,
+    /// Multiplier for excess ratio in sudden jumps (default: 0.05)
+    pub sudden_jump_excess: f64,
+    /// Normalizer for flattening duration (default: 30.0)
+    pub flattening_normalizer: f64,
+    /// Weight for flattening penalty (default: 0.25)
+    pub flattening_weight: f64,
+    /// Base weight for rapid drops (default: 0.3)
+    pub rapid_drop_base: f64,
+    /// Multiplier for excess ratio in rapid drops (default: 0.05)
+    pub rapid_drop_excess: f64,
+    /// Weight for unnatural curve penalty (default: 0.25)
+    pub unnatural_curve_weight: f64,
+}
+
+impl Default for BotProbabilityWeights {
+    fn default() -> Self {
+        Self {
+            sudden_jump_base: 0.3,
+            sudden_jump_excess: 0.05,
+            flattening_normalizer: 30.0,
+            flattening_weight: 0.25,
+            rapid_drop_base: 0.3,
+            rapid_drop_excess: 0.05,
+            unnatural_curve_weight: 0.25,
+        }
+    }
 }
 
 impl Default for HolderGrowthConfig {
@@ -138,6 +173,7 @@ impl Default for HolderGrowthConfig {
             flattening_threshold: 5,
             flattening_duration_threshold: 15,
             rapid_drop_threshold: 3.0,
+            bot_prob_weights: BotProbabilityWeights::default(),
         }
     }
 }
@@ -530,6 +566,7 @@ impl HolderGrowthAnalyzer {
         anomalies: &[GrowthAnomaly],
     ) -> f64 {
         let mut bot_score = 0.0;
+        let weights = &self.config.bot_prob_weights;
 
         // Each anomaly increases bot probability
         for anomaly in anomalies {
@@ -538,27 +575,28 @@ impl HolderGrowthAnalyzer {
                     let avg_rate = self.calculate_growth_rate(snapshots).abs();
                     if avg_rate > 0.0 {
                         let ratio = growth_rate / avg_rate;
-                        // Strong penalty for sudden jumps - base 0.3 + extra for high ratios
+                        // Strong penalty for sudden jumps - base + excess
                         let excess_ratio = (ratio - self.config.sudden_jump_threshold).max(0.0);
-                        bot_score += 0.3 + (excess_ratio * 0.05);
+                        bot_score += weights.sudden_jump_base + (excess_ratio * weights.sudden_jump_excess);
                     }
                 }
                 GrowthAnomaly::SuspiciousFlattening { duration_secs, .. } => {
                     // Longer flattening = higher bot probability
-                    bot_score += (*duration_secs as f64 / 30.0) * 0.25;
+                    bot_score += (*duration_secs as f64 / weights.flattening_normalizer) * weights.flattening_weight;
                 }
                 GrowthAnomaly::RapidDrop { drop_rate, .. } => {
                     let avg_rate = self.calculate_growth_rate(snapshots).abs();
                     if avg_rate > 0.0 {
                         let ratio = drop_rate / avg_rate;
-                        bot_score += (ratio - self.config.rapid_drop_threshold).max(0.0) * 0.3;
+                        let excess_ratio = (ratio - self.config.rapid_drop_threshold).max(0.0);
+                        bot_score += weights.rapid_drop_base + (excess_ratio * weights.rapid_drop_excess);
                     }
                 }
                 GrowthAnomaly::UnnaturalCurve { variance, expected_variance } => {
                     if *expected_variance > 0.0 {
                         let ratio = variance / expected_variance;
                         // Lower variance = higher bot probability
-                        bot_score += (1.0 - ratio).max(0.0) * 0.25;
+                        bot_score += (1.0 - ratio).max(0.0) * weights.unnatural_curve_weight;
                     }
                 }
             }
