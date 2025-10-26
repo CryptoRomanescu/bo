@@ -82,10 +82,19 @@ Complete verification result containing:
 #### `LpLockConfig`
 ```rust
 LpLockConfig {
+    // Core parameters
     timeout_secs: 5,              // Max verification time
     min_lock_percentage: 80,      // Min acceptable lock %
     min_lock_duration_days: 180,  // Min lock duration
     auto_reject_threshold: 50,    // Auto-reject below this %
+    
+    // Reliability parameters (see Production Improvements)
+    max_concurrent_rpc: 16,       // Max concurrent RPC calls
+    rpc_timeout_secs: 3,          // Per-RPC timeout
+    max_retries: 3,               // Retry attempts for transient errors
+    backoff_base_ms: 100,         // Exponential backoff base
+    max_backoff_secs: 5,          // Max backoff duration
+    rpc_rate_limit: 10,           // RPC rate limit (req/s)
 }
 ```
 
@@ -372,6 +381,131 @@ When adding new lock programs or burn addresses:
 3. Update documentation
 4. Add test coverage
 5. Submit PR with verification proof
+
+## Production Improvements (2025)
+
+### Reliability & Resilience Enhancements
+
+The LP Lock Verifier has been upgraded with production-grade reliability features addressing critical concerns identified in the issue:
+
+#### 1. Concurrency Control
+- **Problem**: Unbounded parallel verification could exhaust RPC quota and trigger rate limits
+- **Solution**: Added `tokio::sync::Semaphore` to limit concurrent RPC calls
+- **Configuration**: `max_concurrent_rpc` (default: 16)
+- **Impact**: Prevents RPC exhaustion and 429 errors
+
+#### 2. Retry Logic with Exponential Backoff
+- **Problem**: No retry policy for transient RPC failures
+- **Solution**: Implemented retry with exponential backoff + jitter using `tokio-retry`
+- **Configuration**:
+  - `max_retries` (default: 3)
+  - `backoff_base_ms` (default: 100ms)
+  - `max_backoff_secs` (default: 5s)
+- **Impact**: Graceful handling of network instability and transient errors
+
+#### 3. Per-RPC Timeout
+- **Problem**: Individual RPC calls could hang indefinitely
+- **Solution**: Added per-call timeout with `tokio::time::timeout`
+- **Configuration**: `rpc_timeout_secs` (default: 3s)
+- **Impact**: Prevents hanging requests from blocking verification
+
+#### 4. Cooperative Shutdown
+- **Problem**: Tasks could leak during shutdown, critical for nonce accounts
+- **Solution**: Added `CancellationToken` for graceful cancellation
+- **API**: `shutdown()` and `cancellation_token()` methods
+- **Impact**: Clean shutdown with no task leaks
+
+#### 5. Rate Limiting
+- **Problem**: No QPS control could trigger provider rate limits
+- **Solution**: Added `governor::RateLimiter` for per-endpoint rate limiting
+- **Configuration**: `rpc_rate_limit` (default: 10 req/s)
+- **Impact**: Prevents 429 errors from rate limiting
+
+#### 6. Error Classification
+- **Problem**: Poor error handling with unwrap_or defaults
+- **Solution**: Created `LpVerifierError` enum with `thiserror`
+- **Types**: Transient vs Permanent error classification
+- **Impact**: Intelligent retry decisions and better debugging
+
+#### 7. Safe Arithmetic
+- **Problem**: u128 arithmetic could panic on overflow
+- **Solution**: 
+  - `checked_mul` and `checked_div` for percentage calculations
+  - `saturating_add` for accumulation operations
+  - `calculate_percentage` helper with overflow protection
+- **Impact**: No panics on unexpected values
+
+#### 8. Batch RPC Operations
+- **Problem**: Multiple sequential RPC calls increased latency
+- **Solution**: Use `getMultipleAccounts` for batch fetching burn address ATAs
+- **Impact**: Reduced RPC calls and lower latency
+
+#### 9. Enhanced Instrumentation
+- **Solution**: Added `#[instrument]` macros for distributed tracing
+- **Benefits**: Better observability and debugging in production
+- **Coverage**: All critical verification methods
+
+### Updated Configuration
+
+```rust
+LpLockConfig {
+    // Original parameters
+    timeout_secs: 5,
+    min_lock_percentage: 80,
+    min_lock_duration_days: 180,
+    auto_reject_threshold: 50,
+    
+    // New reliability parameters
+    max_concurrent_rpc: 16,      // Concurrency limit
+    rpc_timeout_secs: 3,         // Per-RPC timeout
+    max_retries: 3,              // Retry attempts
+    backoff_base_ms: 100,        // Base backoff delay
+    max_backoff_secs: 5,         // Max backoff delay
+    rpc_rate_limit: 10,          // Requests per second
+}
+```
+
+### Performance Characteristics (Updated)
+
+- **Target**: <5 seconds per verification ✅
+- **Average**: 200-400ms (improved with batching)
+- **Cache Hit**: <1ms
+- **RPC Safety**: Rate-limited, retried, and timed out
+- **Concurrency**: Controlled via semaphore
+- **Reliability**: Transient error retry, graceful shutdown
+
+### Migration Guide
+
+Existing code using default configuration continues to work:
+```rust
+let verifier = LpLockVerifier::new(LpLockConfig::default(), rpc_client);
+```
+
+For custom configuration, use struct update syntax:
+```rust
+let config = LpLockConfig {
+    max_concurrent_rpc: 32,
+    rpc_rate_limit: 20,
+    ..Default::default()
+};
+```
+
+Graceful shutdown support:
+```rust
+// Get cancellation token for external coordination
+let token = verifier.cancellation_token();
+
+// Shutdown when needed
+verifier.shutdown();
+```
+
+### Security Improvements
+
+All percentage calculations now use safe arithmetic:
+- Overflow detection with `checked_mul`
+- Saturating addition with `saturating_add`
+- Division-by-zero protection
+- Conservative error handling (assume worst case on calculation errors)
 
 ## License
 

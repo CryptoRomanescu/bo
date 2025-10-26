@@ -2068,6 +2068,7 @@ dependencies = [
  "spl-token 8.0.0",
  "sqlx",
  "subtle",
+ "thiserror 2.0.17",
  "tokio",
  "tokio-retry",
  "tokio-util",
