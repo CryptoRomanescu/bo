@@ -755,10 +755,12 @@ impl LpLockVerifier {
                 for (idx, maybe_account) in accounts.iter().enumerate() {
                     if let Some(account) = maybe_account {
                         // Parse token account data to get balance
-                        if account.data.len() >= spl_token::state::Account::LEN {
+                        // SPL Token accounts have a fixed size - reject accounts with unexpected data
+                        if account.data.len() == spl_token::state::Account::LEN {
                             match spl_token::state::Account::unpack_from_slice(&account.data) {
                                 Ok(token_account) => {
-                                    let balance_raw = token_account.amount as u128;
+                                    // Use explicit conversion for type safety
+                                    let balance_raw = u128::from(token_account.amount);
                                     if balance_raw > 0 {
                                         let burn_addr = &burn_atas[idx].0;
                                         debug!(
@@ -766,7 +768,8 @@ impl LpLockVerifier {
                                             balance_raw, burn_addr
                                         );
                                         total_burned_raw = total_burned_raw.saturating_add(balance_raw);
-                                        burn_addresses_with_balance.push(burn_addr.to_string());
+                                        // Clone the reference to avoid unnecessary intermediate allocation
+                                        burn_addresses_with_balance.push(burn_addr.clone());
                                     }
                                 }
                                 Err(e) => {
