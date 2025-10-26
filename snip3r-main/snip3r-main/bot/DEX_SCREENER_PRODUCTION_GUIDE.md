@@ -309,18 +309,17 @@ Implement health check endpoints:
 
 ```rust
 async fn health_check(tracker: Arc<DexScreenerTracker>) -> Result<HealthStatus> {
-    // Check if tracker can fetch data
-    let is_healthy = tracker.is_trending("test").await;
+    // Check if tracker is enabled
+    let tracking_enabled = tracker.config.enable_tracking;
     
-    // Check circuit breaker state
-    let cb_state = if let Some(ref cb) = tracker.circuit_breaker {
-        cb.is_available("dex_screener_api").await
-    } else {
-        true
-    };
+    // Check if we can fetch metrics (will use cache if available)
+    let metrics_available = tracker
+        .get_trending_metrics("health_check")
+        .await
+        .is_ok();
     
     Ok(HealthStatus {
-        healthy: is_healthy && cb_state,
+        healthy: is_healthy,
         details: "DEX Screener tracker operational"
     })
 }
@@ -401,11 +400,22 @@ tracker.get_trending_metrics("token").await?;  // Safe
 
 ### 3. Input Validation
 
-All token addresses are validated:
+Token addresses should be validated before use:
 
 ```rust
-// Invalid addresses are logged and skipped
-let metrics = tracker.get_trending_metrics("invalid").await?;
+// Proper error handling for token metrics
+match tracker.get_trending_metrics(token_address).await {
+    Ok(metrics) => {
+        // Process valid metrics
+        if metrics.is_trending {
+            info!("Token is trending");
+        }
+    }
+    Err(e) => {
+        warn!("Failed to get metrics for {}: {}", token_address, e);
+        // Handle error - may be invalid address or API issue
+    }
+}
 ```
 
 ### 4. Network Security
@@ -461,10 +471,17 @@ base_url = "https://api.dexscreener.com/latest"
    min_trending_rank = 50  # Track fewer tokens
    ```
 
-3. Monitor memory with:
+3. Monitor memory by tracking the number of trending tokens:
    ```rust
-   let positions = tracker.trending_positions.read().await;
-   info!("Tracking {} tokens", positions.len());
+   // Check how many tokens are currently trending
+   // Use is_trending public method for multiple tokens
+   let mut trending_count = 0;
+   for token_address in &token_list {
+       if tracker.is_trending(token_address).await {
+           trending_count += 1;
+       }
+   }
+   info!("Currently tracking {} trending tokens", trending_count);
    ```
 
 ### Issue: Rate Limit Exceeded
