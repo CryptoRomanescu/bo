@@ -1051,7 +1051,7 @@ impl LpLockVerifier {
     ///
     /// # Returns
     /// `true` if the address is secured, `false` otherwise
-    fn is_address_secured(&self, address: &str) -> bool {
+    pub fn is_address_secured(&self, address: &str) -> bool {
         // Check if it's a known burn address
         if BURN_ADDRESSES.contains(&address) {
             debug!("Address {} is a burn address", address);
@@ -1393,5 +1393,91 @@ mod tests {
         };
         let risk = verifier.calculate_risk_level(&locked_status);
         assert!(!verifier.should_auto_reject(&locked_status, &risk));
+    }
+
+    #[test]
+    fn test_is_address_secured() {
+        let config = LpLockConfig::default();
+        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let verifier = LpLockVerifier::new(config, rpc);
+
+        // Test burn addresses are secured
+        assert!(verifier.is_address_secured("11111111111111111111111111111111"));
+        assert!(verifier.is_address_secured("1nc1nerator11111111111111111111111111111111"));
+        assert!(verifier.is_address_secured("JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB"));
+
+        // Test lock programs are secured
+        assert!(verifier.is_address_secured("LocktDzaV1W2Bm9DeZeiyz4J9zs4fRqNiYqQyracRXw"));
+        assert!(verifier.is_address_secured("UNCXwJaodKz7uGqz3yXzx4qcAa6aKMxxdFTvVkYsw5W"));
+
+        // Test DEX programs are secured
+        assert!(verifier.is_address_secured("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")); // Raydium
+        assert!(verifier.is_address_secured("whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc")); // Orca
+
+        // Test farm programs are secured
+        assert!(verifier.is_address_secured("EhhTKczWMGQt46ynNeRX1WfeagwwJd7ufHvCDjRxjo5Q")); // Raydium Farm
+        
+        // Test Pump.fun is secured
+        assert!(verifier.is_address_secured("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"));
+
+        // Test random address is not secured
+        assert!(!verifier.is_address_secured("RandomWalletAddress123456789"));
+        assert!(!verifier.is_address_secured("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin"));
+    }
+
+    #[test]
+    fn test_partial_lock_safety_score() {
+        let config = LpLockConfig::default();
+        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let verifier = LpLockVerifier::new(config, rpc);
+
+        // Test partial: 60% locked + 40% burned = 100%
+        let partial_full = LockStatus::Partial {
+            locked_percentage: 60,
+            burned_percentage: 40,
+            lock_info: None,
+        };
+        assert_eq!(verifier.calculate_safety_score(&partial_full), 100);
+
+        // Test partial: 30% locked + 30% burned = 60%
+        let partial_60 = LockStatus::Partial {
+            locked_percentage: 30,
+            burned_percentage: 30,
+            lock_info: None,
+        };
+        assert_eq!(verifier.calculate_safety_score(&partial_60), 60);
+
+        // Test partial: 0% locked + 0% burned = 0%
+        let partial_zero = LockStatus::Partial {
+            locked_percentage: 0,
+            burned_percentage: 0,
+            lock_info: None,
+        };
+        assert_eq!(verifier.calculate_safety_score(&partial_zero), 0);
+    }
+
+    #[test]
+    fn test_unlocked_safety_score() {
+        let config = LpLockConfig::default();
+        let rpc = Arc::new(RpcClient::new("https://api.mainnet-beta.solana.com".to_string()));
+        let verifier = LpLockVerifier::new(config, rpc);
+
+        // Test 100% unlocked = 0 safety
+        let unlocked_full = LockStatus::Unlocked {
+            percentage_unlocked: 100,
+        };
+        assert_eq!(verifier.calculate_safety_score(&unlocked_full), 0);
+
+        // Test 50% unlocked = 50 safety
+        let unlocked_half = LockStatus::Unlocked {
+            percentage_unlocked: 50,
+        };
+        assert_eq!(verifier.calculate_safety_score(&unlocked_half), 50);
+
+        // Test 10% unlocked = 90 safety
+        let unlocked_low = LockStatus::Unlocked {
+            percentage_unlocked: 10,
+        };
+        assert_eq!(verifier.calculate_safety_score(&unlocked_low), 90);
     }
 }
